@@ -1,0 +1,110 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Production builds
+/build
+/dist
+*.tgz
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+logs
+*.log
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+
+# Database
+*.sqlite
+*.db
+
+# Temporary files
+tmp/
+temp/
+
+# Docker (removed - no longer using Docker)
+# Dockerfile.local
+# docker-compose.override.yml
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# Java
+*.class
+*.jar
+*.war
+*.ear
+
+# Compiled source
+*.com
+*.class
+*.dll
+*.exe
+*.o
+*.so
+
+# Security
+*.pem
+*.key
+secrets/ 
+
+# Data and embeddings (exclude from repository)
+data/
+data/embeddings/
+*.data/
+*.json.gz
+*.pkl
+*.pickle
+products_with_embeddings.json
+
+# Documentation (exclude from repository)
+docs/
+
+# Large data files
+*.csv
+*.jsonl
+*.parquet

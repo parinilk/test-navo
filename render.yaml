@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: navo-backend
+    env: python
+    buildCommand: cd src/backend && pip install -r requirements.txt
+    startCommand: cd src/backend && bash start.sh
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12"
+      - key: PYTHONPATH
+        value: "/opt/render/project/src/backend"
+      # Add your environment variables here
+      - key: MONGODB_URL
+        sync: false  # Set this in Render dashboard
+      - key: MONGODB_DB_NAME
+        value: "Navo_data"
+      - key: PINECONE_API_KEY
+        sync: false  # Set this in Render dashboard
+      - key: PINECONE_ENVIRONMENT
+        sync: false  # Set this in Render dashboard
+      - key: PINECONE_INDEX_NAME
+        value: "navo-products"
+      - key: AZURE_OPENAI_API_KEY
+        sync: false  # Set this in Render dashboard
+      - key: AZURE_OPENAI_ENDPOINT
+        sync: false  # Set this in Render dashboard
+      - key: AZURE_OPENAI_DEPLOYMENT_NAME
+        sync: false  # Set this in Render dashboard
+      - key: AZURE_OPENAI_API_VERSION
+        value: "2024-02-15-preview"
+      - key: AZURE_OPENAI_EMBEDDING_DEPLOYMENT
+        sync: false  # Set this in Render dashboard
+      - key: ALLOWED_ORIGINS
+        value: "https://your-app.vercel.app"  # Update with your Vercel URL

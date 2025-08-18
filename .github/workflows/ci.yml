@@ -1,0 +1,320 @@
+# Navo Development CI - DISABLED FOR LOCAL DEVELOPMENT
+# Uncomment this file when ready for automated testing and deployment
+
+# name: Navo Development CI
+# 
+# on:
+#   push:
+#     branches: [ main, develop ]
+#   pull_request:
+#     branches: [ main, develop ]
+# 
+# env:
+#   NODE_VERSION: '18.x'
+#   PYTHON_VERSION: '3.11'
+# 
+# jobs:
+#   # Frontend Testing and Building
+#   frontend-test:
+#     runs-on: ubuntu-latest
+#     
+#     steps:
+#     - name: Checkout code
+#       uses: actions/checkout@v4
+#       
+#     - name: Setup Node.js
+#       uses: actions/setup-node@v4
+#       with:
+#         node-version: ${{ env.NODE_VERSION }}
+#         cache: 'npm'
+#         cache-dependency-path: 'src/frontend/package-lock.json'
+#     
+#     - name: Install dependencies
+#       run: |
+#         cd src/frontend
+#         npm ci
+#     
+#     - name: Type check
+#       run: |
+#         cd src/frontend
+#         npm run type-check
+#     
+#     - name: Lint
+#       run: |
+#         cd src/frontend
+#         npm run lint
+#     
+#     - name: Test
+#       run: |
+#         cd src/frontend
+#         npm run test:coverage
+#     
+#     - name: Build
+#       run: |
+#         cd src/frontend
+#         npm run build
+#       env:
+#         NEXT_PUBLIC_API_URL: http://localhost:8000
+#         NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+#         NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+# 
+#   # Backend Testing
+#   backend-test:
+#     runs-on: ubuntu-latest
+#     
+#     services:
+#       postgres:
+#         image: postgres:15
+#         env:
+#           POSTGRES_PASSWORD: navo123
+#           POSTGRES_DB: navo_test
+#         options: >-
+#           --health-cmd pg_isready
+#           --health-interval 10s
+#           --health-timeout 5s
+#           --health-retries 5
+#         ports:
+#           - 5432:5432
+#       
+#       redis:
+#         image: redis:7
+#         options: >-
+#           --health-cmd "redis-cli ping"
+#           --health-interval 10s
+#           --health-timeout 5s
+#           --health-retries 5
+#         ports:
+#           - 6379:6379
+#     
+#     steps:
+#     - name: Checkout code
+#       uses: actions/checkout@v4
+#       
+#     - name: Setup Python
+#       uses: actions/setup-python@v4
+#       with:
+#         python-version: ${{ env.PYTHON_VERSION }}
+#         
+#     - name: Cache dependencies
+#       uses: actions/cache@v3
+#       with:
+#         path: ~/.cache/pip
+#         key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+#     
+#     - name: Install system dependencies
+#       run: |
+#         sudo apt-get update
+#         sudo apt-get install -y chromium-browser
+#     
+#     - name: Install Python dependencies
+#       run: |
+#         cd src/backend
+#         pip install --upgrade pip
+#         pip install -r requirements.txt
+#         pip install -r requirements-dev.txt
+#     
+#     - name: Install Playwright
+#       run: |
+#         cd src/backend
+#         playwright install chromium
+#     
+#     - name: Lint with flake8
+#       run: |
+#         cd src/backend
+#         flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+#         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=88 --statistics
+#     
+#     - name: Format check with black
+#       run: |
+#         cd src/backend
+#         black --check .
+#     
+#     - name: Type check with mypy
+#       run: |
+#         cd src/backend
+#         mypy .
+#     
+#     - name: Test with pytest
+#       run: |
+#         cd src/backend
+#         pytest --cov=. --cov-report=xml --cov-report=html
+#       env:
+#         DATABASE_URL: postgresql://postgres:navo123@localhost:5432/navo_test
+#         REDIS_URL: redis://localhost:6379
+#         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+#         PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
+#         SECRET_KEY: test-secret-key
+#         ENV: testing
+#     
+#     - name: Upload coverage to Codecov
+#       uses: codecov/codecov-action@v3
+#       with:
+#         files: ./src/backend/coverage.xml
+#         flags: backend
+# 
+#   # Security Scanning
+#   security-scan:
+#     runs-on: ubuntu-latest
+#     steps:
+#     - name: Checkout code
+#       uses: actions/checkout@v4
+#       
+#     - name: Run Trivy vulnerability scanner
+#       uses: aquasecurity/trivy-action@master
+#       with:
+#         scan-type: 'fs'
+#         scan-ref: '.'
+#         format: 'sarif'
+#         output: 'trivy-results.sarif'
+#     
+#     - name: Upload Trivy scan results to GitHub Security tab
+#       uses: github/codeql-action/upload-sarif@v2
+#       with:
+#         sarif_file: 'trivy-results.sarif'
+#     
+#     - name: Python Security Check
+#       run: |
+#         cd src/backend
+#         pip install safety bandit
+#         safety check
+#         bandit -r . -f json -o bandit-report.json
+#     
+#     - name: Node.js Security Check
+#       run: |
+#         cd src/frontend
+#         npm audit --audit-level moderate
+# 
+#   # Integration Tests (Basic)
+#   integration-test:
+#     runs-on: ubuntu-latest
+#     needs: [frontend-test, backend-test]
+#     
+#     services:
+#       postgres:
+#         image: postgres:15
+#         env:
+#           POSTGRES_PASSWORD: navo123
+#           POSTGRES_DB: navo_test
+#         options: >-
+#           --health-cmd pg_isready
+#           --health-interval 10s
+#           --health-timeout 5s
+#           --health-retries 5
+#         ports:
+#           - 5432:5432
+#       
+#       redis:
+#         image: redis:7
+#         options: >-
+#           --health-cmd "redis-cli ping"
+#           --health-interval 10s
+#           --health-timeout 5s
+#           --health-retries 5
+#         ports:
+#           - 6379:6379
+#     
+#     steps:
+#     - name: Checkout code
+#       uses: actions/checkout@v4
+#       
+#     - name: Setup Node.js
+#       uses: actions/setup-node@v4
+#       with:
+#         node-version: ${{ env.NODE_VERSION }}
+#         
+#     - name: Setup Python
+#       uses: actions/setup-python@v4
+#       with:
+#         python-version: ${{ env.PYTHON_VERSION }}
+#     
+#     - name: Start backend
+#       run: |
+#         cd src/backend
+#         pip install -r requirements.txt
+#         uvicorn main:app --host 0.0.0.0 --port 8000 &
+#         sleep 10
+#       env:
+#         DATABASE_URL: postgresql://postgres:navo123@localhost:5432/navo_test
+#         REDIS_URL: redis://localhost:6379
+#         ENV: testing
+#     
+#     - name: Start frontend
+#       run: |
+#         cd src/frontend
+#         npm ci
+#         npm run build
+#         npm start &
+#         sleep 10
+#       env:
+#         NEXT_PUBLIC_API_URL: http://localhost:8000
+#     
+#     - name: Run E2E tests
+#       run: |
+#         cd src/frontend
+#         npx playwright test
+#     
+#     - name: Upload E2E test results
+#       uses: actions/upload-artifact@v3
+#       if: failure()
+#       with:
+#         name: playwright-report
+#         path: src/frontend/playwright-report/
+# 
+#   # Notify Team (Only on Failure)
+#   notify:
+#     runs-on: ubuntu-latest
+#     if: failure()
+#     needs: [frontend-test, backend-test, security-scan, integration-test]
+#     
+#     steps:
+#     - name: Notify Slack
+#       uses: 8398a7/action-slack@v3
+#       with:
+#         status: ${{ job.status }}
+#         channel: '#navo-dev'
+#         webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+#         message: |
+#           🚨 Navo Development CI Failed
+#           Branch: ${{ github.ref }}
+#           Commit: ${{ github.sha }}
+#           Author: ${{ github.actor }}
+
+# =============================================================================
+# LOCAL DEVELOPMENT SETUP
+# =============================================================================
+# 
+# To enable local testing, run these commands in your terminal:
+# 
+# Frontend Testing:
+# cd src/frontend
+# npm install
+# npm run lint
+# npm run type-check
+# npm test
+# npm run build
+# 
+# Backend Testing:
+# cd src/backend
+# pip install -r requirements.txt
+# pip install -r requirements-dev.txt
+# flake8 .
+# black --check .
+# mypy .
+# pytest
+# 
+# Integration Testing:
+# # Start backend in one terminal:
+# cd src/backend
+# uvicorn main:app --reload
+# 
+# # Start frontend in another terminal:
+# cd src/frontend
+# npm run dev
+# 
+# # Run E2E tests in a third terminal:
+# cd src/frontend
+# npx playwright test
+# 
+# =============================================================================
+# WHEN READY FOR DEPLOYMENT
+# ============================================================================= 
