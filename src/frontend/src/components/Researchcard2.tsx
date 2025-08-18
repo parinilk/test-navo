@@ -1,6 +1,7 @@
 
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { config } from "../config/config";
 
 interface ResearchContext {
   role: string;
@@ -46,8 +47,8 @@ const Researchcard2 = () => {
     setError(null);
     
     try {
-      // Hard-coded for testing - replace with environment variable later
-      const API_BASE_URL = 'http://localhost:8000';
+      // Use config for API URL
+      const API_BASE_URL = config.apiUrl.replace('/api/v1', '');
       console.log('Submitting query to:', `${API_BASE_URL}/api/v1/research/query`);
       
       const response = await fetch(`${API_BASE_URL}/api/v1/research/query`, {
