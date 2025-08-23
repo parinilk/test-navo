@@ -32,4 +32,4 @@ services:
       - key: AZURE_OPENAI_EMBEDDING_DEPLOYMENT
         sync: false  # Set this in Render dashboard
       - key: ALLOWED_ORIGINS
-        value: "https://navo-main-azure.vercel.app,http://localhost:3000,http://localhost:5173"  # Update with your actual Vercel URL
+        value: "https://test-navo-jsyb.vercel.app/,http://localhost:3000,http://localhost:5173"  # Update with your actual Vercel URL
