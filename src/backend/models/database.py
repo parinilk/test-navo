@@ -64,7 +64,7 @@ async def close_mongo_connection(client: AsyncIOMotorClient):
 
 def get_database():
     """Get database instance"""
-    if not db_connection.database:
+    if db_connection.database is None:
         logger.warning("⚠️ Database not connected, returning None")
         return None
     return db_connection.database
@@ -84,10 +84,27 @@ def get_database_dependency():
         logger.warning(f"⚠️ Database dependency failed: {e}, proceeding without MongoDB")
         return None
 
-# Collection names based on your MongoDB Atlas screenshot
+# Collection names for RAG Filters.md architecture
 COLLECTIONS = {
-    "main_data": "main_data",  # Your main product data collection
-    "regulatory_compliance": "regulatory_compliance",  # If you have this
-    "research_sessions": "research_sessions",  # For storing user research sessions
-    "user_feedback": "user_feedback"  # For storing user feedback
+    # Product Dataset Collections
+    "main_data": "main_data",  # Main product data collection
+    "product_embeddings": "product_embeddings",  # Product vector embeddings
+    "product_metadata": "product_metadata",  # Enhanced product metadata
+    
+    # Regulatory Dataset Collections  
+    "regulatory_compliance": "regulatory_compliance",  # Regulatory compliance data
+    "ingredient_safety": "ingredient_safety",  # Ingredient safety information
+    "jurisdiction_rules": "jurisdiction_rules",  # Region-specific regulations
+    
+    # System Collections
+    "research_sessions": "research_sessions",  # User research sessions
+    "user_feedback": "user_feedback",  # User feedback
+    "query_analytics": "query_analytics"  # Query performance analytics
+}
+
+# Dataset routing mappings (from intent_router.py)
+DATASET_COLLECTIONS = {
+    "product_data": ["main_data", "product_embeddings", "product_metadata"],
+    "regulatory_compliance": ["regulatory_compliance", "ingredient_safety", "jurisdiction_rules"],
+    "both": ["main_data", "product_embeddings", "regulatory_compliance", "ingredient_safety"]
 }

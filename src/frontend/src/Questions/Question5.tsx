@@ -1,19 +1,46 @@
 
 
 import { useEffect, useRef, useState } from "react";
+import config from "../config/config";
+import EnhancedLLMMessage from "../components/EnhancedLLMMessage";
 
 interface Message {
   sender: "User" | "LLM";
   text: string;
 }
 
-const initialMessages: Message[] = [
-  { sender: "User", text: "What is the capital of France?" },
-  { sender: "LLM", text: "The capital of France is Paris." }
-];
+interface ResearchResult {
+  query: string;
+  answer: string;
+  rationale: string;
+  sources_used: string[];  // Fixed: match backend field name
+  disclaimer?: string;
+  session_id: string;
+  timestamp: string;
+  retrieved_products?: any[];
+  web_search_results?: any[];  // Added: web search results
+  confidence_score?: number;   // Added: confidence score
+  data_gaps?: string[];        // Added: data gaps
+  analysis_complexity?: string; // Added: analysis complexity
+  regulatory_analysis?: any;    // Added: regulatory analysis
+}
 
-const Question5 = ({ onPin }: { onPin: (text: string) => void }) => {
-  const [messages, setMessages] = useState<Message[]>(initialMessages);
+const Question5 = ({ onPin, researchResult }: { onPin: (text: string) => void; researchResult: ResearchResult | null }) => {
+  // Initialize messages based on research result or use defaults
+  const getInitialMessages = (): Message[] => {
+    if (researchResult) {
+      return [
+        { sender: "User", text: researchResult.query },
+        { sender: "LLM", text: researchResult.answer }  // Changed: use answer instead of rationale
+      ];
+    }
+    return [
+      { sender: "User", text: "What is the rationale behind this?" },
+      { sender: "LLM", text: "Here's the detailed reasoning..." }
+    ];
+  };
+  
+  const [messages, setMessages] = useState<Message[]>(getInitialMessages());
   const [selectedText, setSelectedText] = useState("");
   const [showPin, setShowPin] = useState(false);
   const [pinPosition, setPinPosition] = useState({ x: 0, y: 0 });
@@ -23,6 +50,18 @@ const Question5 = ({ onPin }: { onPin: (text: string) => void }) => {
   const [showConfirm, setShowConfirm] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+
+  // Update messages when researchResult changes
+  useEffect(() => {
+    const initialMessages: Message[] = researchResult ? [
+      { sender: "User", text: researchResult.query },
+      { sender: "LLM", text: researchResult.answer }  // Changed: use answer
+    ] : [
+      { sender: "User", text: "What is the rationale behind this?" },
+      { sender: "LLM", text: "Here's the detailed reasoning..." }
+    ];
+    setMessages(initialMessages);
+  }, [researchResult]);
 
   // --- scroll to bottom whenever messages change ---
   useEffect(() => {
@@ -55,15 +94,56 @@ const Question5 = ({ onPin }: { onPin: (text: string) => void }) => {
     window.getSelection()?.removeAllRanges();
   };
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (inputText.trim() === "") return;
+    
     const userMessage: Message = { sender: "User", text: inputText.trim() };
-    const llmResponse: Message = {
-      sender: "LLM",
-      text: "This is a static LLM response."
-    };
-    setMessages((prev) => [...prev, userMessage, llmResponse]);
+    setMessages((prev) => [...prev, userMessage]);
     setInputText("");
+    
+    // Show loading state
+    const loadingMessage: Message = { sender: "LLM", text: "Thinking..." };
+    setMessages((prev) => [...prev, loadingMessage]);
+    
+    try {
+      // Use the research API to get a real response
+      const API_BASE_URL = config.apiUrl.replace('/api/v1', '');
+      const response = await fetch(`${API_BASE_URL}/api/v1/research/query`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: inputText.trim(),
+          context: researchResult ? {
+            previous_query: researchResult.query,
+            session_id: researchResult.session_id
+          } : undefined,
+          session_id: researchResult?.session_id || undefined,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to get response');
+      }
+
+      const result = await response.json();
+      
+      // Replace loading message with actual response
+      setMessages((prev) => 
+        prev.slice(0, -1).concat([{ sender: "LLM", text: result.answer }])
+      );
+      
+    } catch (error) {
+      console.error('Error getting LLM response:', error);
+      // Replace loading message with error message
+      setMessages((prev) => 
+        prev.slice(0, -1).concat([{ 
+          sender: "LLM", 
+          text: "Sorry, I couldn't process your question right now. Please try again." 
+        }])
+      );
+    }
   };
 
   const handleEditClick = (index: number) => {
@@ -101,11 +181,10 @@ const Question5 = ({ onPin }: { onPin: (text: string) => void }) => {
             }`}
           >
             {msg.sender === "LLM" ? (
-              <div className="flex flex-col w-full items-start">
-                <div className="max-w-[70%] px-4 py-2 rounded-lg bg-gray-100 text-sm text-left">
-                  <strong>{msg.sender}:</strong> {msg.text}
-                </div>
-              </div>
+              <EnhancedLLMMessage
+                message={msg}
+                researchResult={researchResult}
+              />
             ) : (
               <div className="flex flex-col items-end max-w-[70%]">
                 <div className="px-4 py-2 rounded-lg bg-blue-100 text-sm text-right">
@@ -162,6 +241,12 @@ const Question5 = ({ onPin }: { onPin: (text: string) => void }) => {
           placeholder="Please add context to your question"
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              handleSend();
+            }
+          }}
           className="flex-1 bg-transparent outline-none text-sm px-3 py-2"
         />
         <button className="ml-2 p-2" onClick={handleSend}>

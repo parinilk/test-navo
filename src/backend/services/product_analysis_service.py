@@ -86,9 +86,25 @@ class ProductAnalysisService:
         concentration_analysis = {}
         
         for product in products:
-            for ingredient in product.ingredients:
+            # Handle both EnhancedProduct objects and dictionaries
+            if hasattr(product, 'ingredients'):
+                ingredients = product.ingredients
+            elif isinstance(product, dict) and 'ingredients' in product:
+                ingredients = product['ingredients']
+            else:
+                # Skip products without ingredients
+                continue
+                
+            for ingredient in ingredients:
+                # Handle both Ingredient objects and dictionaries
+                if hasattr(ingredient, 'name'):
+                    ing_name = ingredient.name.lower()
+                elif isinstance(ingredient, dict) and 'name' in ingredient:
+                    ing_name = ingredient['name'].lower()
+                else:
+                    continue
+                    
                 # Track ingredient frequency
-                ing_name = ingredient.name.lower()
                 ingredient_frequency[ing_name] = ingredient_frequency.get(ing_name, 0) + 1
                 
                 # Map to functional benefits
@@ -97,21 +113,33 @@ class ProductAnalysisService:
                     for function in functions:
                         if function not in functional_profile:
                             functional_profile[function] = []
+                        
+                        # Handle both object and dictionary formats for ingredient and product
+                        ingredient_name = ingredient.name if hasattr(ingredient, 'name') else ingredient.get('name', 'Unknown')
+                        product_name = product.name if hasattr(product, 'name') else product.get('product_name', 'Unknown')
+                        concentration = ingredient.concentration if hasattr(ingredient, 'concentration') else ingredient.get('concentration', None)
+                        concentration_unit = ingredient.concentration_unit if hasattr(ingredient, 'concentration_unit') else ingredient.get('concentration_unit', None)
+                        
                         functional_profile[function].append({
-                            "ingredient": ingredient.name,
-                            "product": product.name,
-                            "concentration": ingredient.concentration,
-                            "concentration_unit": ingredient.concentration_unit
+                            "ingredient": ingredient_name,
+                            "product": product_name,
+                            "concentration": concentration,
+                            "concentration_unit": concentration_unit
                         })
                 
                 # Concentration analysis
-                if ingredient.concentration:
+                concentration = ingredient.concentration if hasattr(ingredient, 'concentration') else ingredient.get('concentration', None)
+                if concentration:
                     if ing_name not in concentration_analysis:
                         concentration_analysis[ing_name] = []
+                    
+                    product_name = product.name if hasattr(product, 'name') else product.get('product_name', 'Unknown')
+                    concentration_unit = ingredient.concentration_unit if hasattr(ingredient, 'concentration_unit') else ingredient.get('concentration_unit', None)
+                    
                     concentration_analysis[ing_name].append({
-                        "product": product.name,
-                        "concentration": ingredient.concentration,
-                        "unit": ingredient.concentration_unit
+                        "product": product_name,
+                        "concentration": concentration,
+                        "unit": concentration_unit
                     })
         
         return {
@@ -126,52 +154,71 @@ class ProductAnalysisService:
         pricing_data = []
         
         for product in products:
-            if product.pricing and product.pricing.base_price:
+            # Handle both EnhancedProduct objects and dictionaries
+            if hasattr(product, 'pricing') and product.pricing and hasattr(product.pricing, 'base_price'):
+                # EnhancedProduct object
+                pricing_obj = product.pricing
                 price_info = {
-                    "product": product.name,
-                    "brand": product.brand,
-                    "base_price": product.pricing.base_price,
-                    "currency": product.pricing.currency
+                    "product_name": getattr(product, 'name', 'Unknown'),
+                    "base_price": pricing_obj.base_price,
+                    "currency": getattr(pricing_obj, 'currency', 'USD')
                 }
                 
-                # Calculate per-serving cost if possible
-                if product.pricing.servings_per_container:
-                    price_per_serving = product.pricing.base_price / product.pricing.servings_per_container
-                    price_info["price_per_serving"] = round(price_per_serving, 2)
+                if hasattr(pricing_obj, 'servings_per_container') and pricing_obj.servings_per_container:
+                    price_per_serving = pricing_obj.base_price / pricing_obj.servings_per_container
+                    price_info["price_per_serving"] = price_per_serving
                 
-                # Calculate per-unit cost if possible
-                if product.pricing.quantity and product.pricing.quantity_unit:
-                    price_per_unit = product.pricing.base_price / product.pricing.quantity
-                    price_info["price_per_unit"] = round(price_per_unit, 2)
-                    price_info["unit"] = product.pricing.quantity_unit
+                if hasattr(pricing_obj, 'quantity') and hasattr(pricing_obj, 'quantity_unit') and pricing_obj.quantity:
+                    price_per_unit = pricing_obj.base_price / pricing_obj.quantity
+                    price_info["price_per_unit"] = price_per_unit
+                    price_info["unit"] = pricing_obj.quantity_unit
                 
                 pricing_data.append(price_info)
+                
+            elif isinstance(product, dict):
+                # Dictionary format - look for pricing fields
+                price_info = {
+                    "product_name": product.get('product_name', 'Unknown'),
+                    "base_price": None,
+                    "currency": "USD"
+                }
+                
+                # Check for different possible pricing field names
+                if 'price' in product and product['price']:
+                    price_info["base_price"] = float(product['price'])
+                elif 'pricing' in product and isinstance(product['pricing'], dict):
+                    pricing_dict = product['pricing']
+                    if 'base_price' in pricing_dict:
+                        price_info["base_price"] = float(pricing_dict['base_price'])
+                    elif 'price' in pricing_dict:
+                        price_info["base_price"] = float(pricing_dict['price'])
+                
+                # Check for servings information
+                if 'servings_per_container' in product and product['servings_per_container']:
+                    try:
+                        servings = float(product['servings_per_container'])
+                        if price_info["base_price"]:
+                            price_info["price_per_serving"] = price_info["base_price"] / servings
+                    except (ValueError, TypeError):
+                        pass
+                
+                # Only add if we have some pricing information
+                if price_info["base_price"]:
+                    pricing_data.append(price_info)
         
         if not pricing_data:
             return {"error": "No pricing data available", "products_with_pricing": 0}
         
-        # Calculate statistics
-        base_prices = [p["base_price"] for p in pricing_data]
-        per_serving_prices = [p["price_per_serving"] for p in pricing_data if "price_per_serving" in p]
+        # Calculate pricing statistics
+        base_prices = [p["base_price"] for p in pricing_data if p["base_price"]]
+        per_serving_prices = [p["price_per_serving"] for p in pricing_data if "price_per_serving" in p and p["price_per_serving"]]
         
-        analysis = {
+        return {
             "products_with_pricing": len(pricing_data),
-            "price_range": {
-                "min": min(base_prices),
-                "max": max(base_prices),
-                "average": round(sum(base_prices) / len(base_prices), 2)
-            },
+            "base_price_range": {"min": min(base_prices), "max": max(base_prices), "average": sum(base_prices) / len(base_prices)} if base_prices else {},
+            "per_serving_range": {"min": min(per_serving_prices), "max": max(per_serving_prices), "average": sum(per_serving_prices) / len(per_serving_prices)} if per_serving_prices else {},
             "detailed_pricing": pricing_data
         }
-        
-        if per_serving_prices:
-            analysis["per_serving_range"] = {
-                "min": min(per_serving_prices),
-                "max": max(per_serving_prices),
-                "average": round(sum(per_serving_prices) / len(per_serving_prices), 2)
-            }
-        
-        return analysis
     
     def _compare_products(self, products: List[EnhancedProduct]) -> Dict[str, Any]:
         """Detailed product comparison analysis"""
@@ -185,9 +232,17 @@ class ProductAnalysisService:
         # Brand analysis
         brands = {}
         for product in products:
-            if product.brand not in brands:
-                brands[product.brand] = []
-            brands[product.brand].append(product)
+            # Handle both EnhancedProduct objects and dictionaries
+            if hasattr(product, 'brand') and product.brand:
+                brand_name = product.brand
+            elif isinstance(product, dict) and product.get('brand'):
+                brand_name = product['brand']
+            else:
+                continue  # Skip products without brand information
+                
+            if brand_name not in brands:
+                brands[brand_name] = []
+            brands[brand_name].append(product)
         
         for brand, brand_products in brands.items():
             comparison["brand_analysis"][brand] = {
@@ -200,74 +255,176 @@ class ProductAnalysisService:
         # Format distribution
         formats = {}
         for product in products:
-            format_name = product.format or "unknown"
+            # Handle both EnhancedProduct objects and dictionaries
+            if hasattr(product, 'format') and product.format:
+                format_name = product.format
+            elif isinstance(product, dict) and product.get('format'):
+                format_name = product['format']
+            else:
+                format_name = "unknown"
+                
             formats[format_name] = formats.get(format_name, 0) + 1
         comparison["format_distribution"] = formats
         
         return comparison
     
     def _identify_data_gaps(self, products: List[EnhancedProduct]) -> List[str]:
-        """Identify missing critical data for analysis"""
+        """Identify missing data that limits analysis quality"""
         gaps = []
         
-        # Check for missing ingredient information
-        products_missing_ingredients = [p.name for p in products if not p.ingredients]
-        if products_missing_ingredients:
-            gaps.append(f"Ingredient lists missing for: {', '.join(products_missing_ingredients[:3])}{'...' if len(products_missing_ingredients) > 3 else ''}")
+        if not products:
+            gaps.append("No products found in dataset")
+            return gaps
         
-        # Check for missing concentrations
-        products_missing_concentrations = []
+        # Check for missing ingredient data
+        products_missing_ingredients = []
         for product in products:
-            if product.ingredients:
-                missing_conc = [ing.name for ing in product.ingredients if ing.role.value in ["active", "functional"] and not ing.concentration]
-                if missing_conc:
-                    products_missing_concentrations.append(product.name)
+            if hasattr(product, 'ingredients'):
+                if not product.ingredients:
+                    products_missing_ingredients.append(getattr(product, 'name', 'Unknown'))
+            elif isinstance(product, dict):
+                if not product.get('ingredients'):
+                    products_missing_ingredients.append(product.get('product_name', 'Unknown'))
         
-        if products_missing_concentrations:
-            gaps.append(f"Active ingredient concentrations missing for: {', '.join(products_missing_concentrations[:3])}{'...' if len(products_missing_concentrations) > 3 else ''}")
+        if products_missing_ingredients:
+            gaps.append(f"Ingredient information missing for {len(products_missing_ingredients)} products")
         
         # Check for missing pricing data
-        products_missing_pricing = [p.name for p in products if not p.pricing or not p.pricing.base_price]
+        products_missing_pricing = []
+        for product in products:
+            if hasattr(product, 'pricing') and product.pricing and hasattr(product.pricing, 'base_price'):
+                if not product.pricing.base_price:
+                    products_missing_pricing.append(getattr(product, 'name', 'Unknown'))
+            elif isinstance(product, dict):
+                has_price = False
+                if 'price' in product and product['price']:
+                    has_price = True
+                elif 'pricing' in product and isinstance(product['pricing'], dict):
+                    pricing_dict = product['pricing']
+                    if 'base_price' in pricing_dict and pricing_dict['base_price']:
+                        has_price = True
+                    elif 'price' in pricing_dict and pricing_dict['price']:
+                        has_price = True
+                
+                if not has_price:
+                    products_missing_pricing.append(product.get('product_name', 'Unknown'))
+        
         if products_missing_pricing:
-            gaps.append(f"Pricing data missing for: {', '.join(products_missing_pricing[:3])}{'...' if len(products_missing_pricing) > 3 else ''}")
+            gaps.append(f"Pricing information missing for {len(products_missing_pricing)} products")
+        
+        # Check for missing brand information
+        products_missing_brand = []
+        for product in products:
+            if hasattr(product, 'brand'):
+                if not product.brand:
+                    products_missing_brand.append(getattr(product, 'name', 'Unknown'))
+            elif isinstance(product, dict):
+                if not product.get('brand'):
+                    products_missing_brand.append(product.get('product_name', 'Unknown'))
+        
+        if products_missing_brand:
+            gaps.append(f"Brand information missing for {len(products_missing_brand)} products")
         
         return gaps
     
     def _calculate_analysis_confidence(self, products: List[EnhancedProduct], data_gaps: List[str]) -> float:
-        """Calculate confidence score for analysis"""
-        base_confidence = 1.0
+        """Calculate confidence score based on data completeness"""
+        if not products:
+            return 0.0
         
-        # Deduct for data gaps
-        gap_penalty = len(data_gaps) * 0.15
-        confidence = base_confidence - gap_penalty
+        # Base confidence starts at 0.5
+        confidence = 0.5
         
-        # Adjust based on sample size
-        if len(products) < 3:
-            confidence -= 0.2  # Small sample size
-        elif len(products) > 10:
-            confidence += 0.1  # Good sample size
+        # Add confidence for each product with complete data
+        for product in products:
+            product_confidence = 0.0
+            
+            # Check ingredients
+            if hasattr(product, 'ingredients') and product.ingredients:
+                product_confidence += 0.2
+            elif isinstance(product, dict) and product.get('ingredients'):
+                product_confidence += 0.2
+            
+            # Check pricing
+            if hasattr(product, 'pricing') and product.pricing and hasattr(product.pricing, 'base_price') and product.pricing.base_price:
+                product_confidence += 0.2
+            elif isinstance(product, dict):
+                has_price = False
+                if 'price' in product and product['price']:
+                    has_price = True
+                elif 'pricing' in product and isinstance(product['pricing'], dict):
+                    pricing_dict = product['pricing']
+                    if 'base_price' in pricing_dict and pricing_dict['base_price']:
+                        has_price = True
+                    elif 'price' in pricing_dict and pricing_dict['price']:
+                        has_price = True
+                
+                if has_price:
+                    product_confidence += 0.2
+            
+            # Check brand
+            if hasattr(product, 'brand') and product.brand:
+                product_confidence += 0.1
+            elif isinstance(product, dict) and product.get('brand'):
+                product_confidence += 0.1
+            
+            # Check category
+            if hasattr(product, 'category') and product.category:
+                product_confidence += 0.1
+            elif isinstance(product, dict) and product.get('category'):
+                product_confidence += 0.1
+            
+            # Add to total confidence
+            confidence += product_confidence
         
-        return max(0.0, min(1.0, confidence))
+        # Penalize for data gaps
+        gap_penalty = len(data_gaps) * 0.05
+        confidence = max(0.0, confidence - gap_penalty)
+        
+        # Cap at 1.0
+        return min(1.0, confidence)
     
     def _generate_insights(self, products: List[EnhancedProduct], analysis: Dict[str, Any]) -> List[str]:
-        """Generate evidence-based insights"""
+        """Generate insights based on analysis results"""
         insights = []
         
-        # Functional ingredient insights
-        functional_analysis = analysis.get("functional_analysis", {})
-        if functional_analysis.get("most_common_actives"):
-            top_ingredient = functional_analysis["most_common_actives"][0]
-            insights.append(f"Most common active ingredient: {top_ingredient[0]} (found in {top_ingredient[1]} products)")
+        if not products:
+            insights.append("No products available for analysis")
+            return insights
+        
+        # Product count insights
+        insights.append(f"Analyzed {len(products)} products in the dataset")
         
         # Pricing insights
         pricing_analysis = analysis.get("pricing_analysis", {})
-        if pricing_analysis.get("per_serving_range"):
-            avg_per_serving = pricing_analysis["per_serving_range"]["average"]
-            insights.append(f"Average cost per serving: ${avg_per_serving}")
+        if pricing_analysis.get("base_price_range"):
+            price_range = pricing_analysis["base_price_range"]
+            insights.append(f"Price range: ${price_range['min']:.2f} - ${price_range['max']:.2f} (avg: ${price_range['average']:.2f})")
         
-        # Market gap insights
-        if analysis["data_gaps"]:
-            insights.append(f"Analysis limited by missing data: {len(analysis['data_gaps'])} critical gaps identified")
+        if pricing_analysis.get("per_serving_range"):
+            serving_range = pricing_analysis["per_serving_range"]
+            insights.append(f"Per-serving cost range: ${serving_range['min']:.2f} - ${serving_range['max']:.2f} (avg: ${serving_range['average']:.2f})")
+        
+        # Functional ingredient insights
+        functional_analysis = analysis.get("functional_analysis", {})
+        if functional_analysis.get("functional_benefits"):
+            profile = functional_analysis["functional_benefits"]
+            top_functions = sorted(profile.items(), key=lambda x: len(x[1]), reverse=True)[:3]
+            insights.append(f"Top functional benefits: {', '.join([f'{func} ({len(products)} products)' for func, products in top_functions])}")
+        
+        # Data quality insights
+        data_gaps = analysis.get("data_gaps", [])
+        if data_gaps:
+            insights.append(f"Data gaps identified: {len(data_gaps)} areas need improvement")
+        
+        # Confidence insights
+        confidence = analysis.get("analysis_confidence", 0)
+        if confidence < 0.5:
+            insights.append("Analysis confidence is low due to missing data")
+        elif confidence > 0.8:
+            insights.append("High confidence analysis with comprehensive data")
+        else:
+            insights.append("Moderate confidence analysis with some data limitations")
         
         return insights
     
@@ -325,7 +482,21 @@ class ProductAnalysisService:
     # Helper methods
     def _get_brand_price_range(self, products: List[EnhancedProduct]) -> Dict[str, float]:
         """Get price range for a brand"""
-        prices = [p.pricing.base_price for p in products if p.pricing and p.pricing.base_price]
+        prices = []
+        for product in products:
+            # Handle both EnhancedProduct objects and dictionaries
+            if hasattr(product, 'pricing') and product.pricing and hasattr(product.pricing, 'base_price') and product.pricing.base_price:
+                prices.append(product.pricing.base_price)
+            elif isinstance(product, dict):
+                if 'price' in product and product['price']:
+                    prices.append(float(product['price']))
+                elif 'pricing' in product and isinstance(product['pricing'], dict):
+                    pricing_dict = product['pricing']
+                    if 'base_price' in pricing_dict and pricing_dict['base_price']:
+                        prices.append(float(pricing_dict['base_price']))
+                    elif 'price' in pricing_dict and pricing_dict['price']:
+                        prices.append(float(pricing_dict['price']))
+        
         if not prices:
             return {"min": 0, "max": 0, "average": 0}
         return {
@@ -338,8 +509,21 @@ class ProductAnalysisService:
         """Get unique ingredients for a brand"""
         all_ingredients = set()
         for product in products:
-            for ingredient in product.ingredients:
-                all_ingredients.add(ingredient.name.lower())
+            # Handle both EnhancedProduct objects and dictionaries
+            if hasattr(product, 'ingredients'):
+                ingredients = product.ingredients
+            elif isinstance(product, dict) and 'ingredients' in product:
+                ingredients = product['ingredients']
+            else:
+                continue
+                
+            for ingredient in ingredients:
+                # Handle both Ingredient objects and dictionaries
+                if hasattr(ingredient, 'name'):
+                    all_ingredients.add(ingredient.name.lower())
+                elif isinstance(ingredient, dict) and 'name' in ingredient:
+                    all_ingredients.add(ingredient['name'].lower())
+        
         return list(all_ingredients)
     
     def _analyze_brand_positioning(self, products: List[EnhancedProduct]) -> str:

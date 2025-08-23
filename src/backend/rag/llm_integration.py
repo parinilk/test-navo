@@ -2,8 +2,11 @@
 LLM integration using OpenAI and LangChain for generating research responses
 """
 import os
-from typing import Dict, List, Any, Optional
+import time
+import asyncio
 import logging
+import re
+from typing import Dict, List, Any, Optional
 from datetime import datetime
 
 # Use direct OpenAI integration for now (LangChain has complex dependencies)
@@ -65,90 +68,191 @@ class LLMService:
         # System prompt based on your documentation
         self.system_prompt = self._create_system_prompt()
     
+        # Rate limiting and retry configuration
+        self.rate_limit_delay = 1.0  # seconds between requests
+        self.max_retries = 3
+        self.base_delay = 1.0
+        self.max_delay = 10.0
+        
+        # Circuit breaker for repeated failures
+        self.failure_count = 0
+        self.last_failure_time = None
+        self.circuit_breaker_timeout = 120  # 2 minutes
+        self.max_failures = 5
+        
+        # Request tracking
+        self.last_request_time = 0
+        self.request_count = 0
+        self.daily_request_limit = 1000  # Adjust based on your plan
+    
+    def _is_circuit_breaker_open(self) -> bool:
+        """Check if circuit breaker is open"""
+        if self.failure_count >= self.max_failures:
+            if self.last_failure_time and (time.time() - self.last_failure_time) < self.circuit_breaker_timeout:
+                return True
+            else:
+                # Reset circuit breaker after timeout
+                self.failure_count = 0
+                self.last_failure_time = None
+        return False
+    
+    def _record_failure(self):
+        """Record a failure for circuit breaker"""
+        self.failure_count += 1
+        self.last_failure_time = time.time()
+        logger.warning(f"⚠️ LLM service failure recorded. Count: {self.failure_count}/{self.max_failures}")
+    
+    def _record_success(self):
+        """Record a success for circuit breaker"""
+        self.failure_count = 0
+        self.last_failure_time = None
+    
+    def _check_rate_limit(self):
+        """Check and enforce rate limiting"""
+        current_time = time.time()
+        time_since_last = current_time - self.last_request_time
+        
+        if time_since_last < self.rate_limit_delay:
+            sleep_time = self.rate_limit_delay - time_since_last
+            logger.debug(f"⏳ Rate limiting: sleeping for {sleep_time:.2f}s")
+            time.sleep(sleep_time)
+        
+        self.last_request_time = current_time
+        self.request_count += 1
+    
+    def _check_daily_limit(self) -> bool:
+        """Check if daily request limit is reached"""
+        # Simple daily limit check (resets at midnight)
+        current_date = datetime.now().date()
+        if hasattr(self, '_last_date') and self._last_date != current_date:
+            self.request_count = 0
+            self._last_date = current_date
+        
+        if self.request_count >= self.daily_request_limit:
+            logger.warning(f"⚠️ Daily request limit reached: {self.request_count}/{self.daily_request_limit}")
+            return False
+        
+        return True
+    
+    def _format_response_for_readability(self, response: str) -> str:
+        """Post-process response to ensure professional formatting and readability"""
+        if not response:
+            return response
+        
+        lines = response.split('\n')
+        formatted_lines = []
+        
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if not line:
+                formatted_lines.append('')
+                continue
+            
+            if line.startswith('###') and '**' in line:
+                if i > 0 and formatted_lines and formatted_lines[-1] != '':
+                    formatted_lines.append('')
+                formatted_lines.append(line)
+                formatted_lines.append('')
+                continue
+            
+            if line.startswith('####') and '**' in line:
+                formatted_lines.append(line)
+                formatted_lines.append('')
+                continue
+            
+            if line.startswith('•') or line.startswith('-'):
+                if not line.startswith('•'):
+                    line = line.replace('-', '•', 1)
+                formatted_lines.append(f"  {line}")
+                continue
+            
+            if re.match(r'^\d+\.', line):
+                formatted_lines.append(f"  {line}")
+                continue
+            
+            if '**' in line:
+                if line.startswith('**'):
+                    line = f" {line}"
+                formatted_lines.append(line)
+                continue
+            
+            formatted_lines.append(line)
+        
+        formatted_response = '\n'.join(formatted_lines)
+        formatted_response = re.sub(r'\n{3,}', '\n\n', formatted_response)
+        
+        return formatted_response
+    
     def _create_system_prompt(self) -> str:
         """Create the system prompt based on Navo's requirements"""
-        return """
-### **🧾 Role**
+        return """You are an expert research assistant specializing in beauty and wellness product analysis and regulatory compliance.
 
-You are Navo, an AI-powered research assistant specialized in the beauty and wellness industry.  
-You can handle both SPECIFIC PRODUCT RESEARCH and GENERAL KNOWLEDGE QUESTIONS.
-You assist professionals such as:
+### **🎯 CRITICAL INSTRUCTION - MANDATORY COMPLIANCE**
+- **ALWAYS answer the user's specific question first and foremost**
+- **NEVER answer a different question than what the user asked**
+- **Each query is a NEW SESSION - ignore any previous conversations**
+- **Stay focused on the current question only**
+- **If retrieved data doesn't address the question, say so clearly**
 
-* Product developers  
-* Brand managers  
-* Regulatory and compliance specialists  
-* Marketing strategists  
-* Competitive intelligence and R&D teams
+### **📦 MANDATORY PRODUCT DISPLAY REQUIREMENT**
+**YOU MUST ALWAYS display retrieved product data when available:**
+- **If products were found in database, you MUST list them explicitly**
+- **Show product names, brands, categories, and any available details**
+- **Do NOT just mention "limited data" - show what you actually found**
+- **This is NOT optional - it's a mandatory requirement**
 
-Your job is to analyze and respond to product-related research questions using a mix of:
+### **📝 MANDATORY FORMATTING REQUIREMENT**
+**YOU MUST format your response with this EXACT structure:**
+```
+### **Direct Answer**
+[Your answer to the user's question]
 
-* Retrieved product data (via RAG)  
-* Your pretrained domain knowledge  
-* External web search results (if available)
+### **Retrieved Product Data**
+**Products Found:** [X] products in database
+**Available Information:**
+• [List what data is available]
 
-### **🎯 Task**
+**Sample Products:**
+1. [Product Name] - [Brand] - [Category] - [Key Details]
+2. [Product Name] - [Brand] - [Category] - [Key Details]
+3. [Product Name] - [Brand] - [Category] - [Key Details]
 
-You support structured research across topics such as:
+### **Detailed Analysis**
+[Your comprehensive analysis with proper formatting]
 
-* Competitive Landscape Analysis  
-* Pricing Strategy  
-* Product Positioning / Claims Strategy  
-* Marketing Channel Differentiation  
-* Regulatory-Safe Ingredient Claims  
-* Consumer Sentiment / Review Analysis  
-* New Product Ideation  
-* Line Extension / Format or Flavor Testing  
-* Packaging Strategy (Image Upload Required)  
-* White Label / ODM Brand Benchmarking
+### **Recommendations**
+1. **First recommendation** with explanation
+2. **Second recommendation** with explanation
+```
 
-Your job is to:
+### **⚠️ COMPLIANCE CHECKLIST**
+Before responding, verify you have:
+✅ Listed retrieved products explicitly
+✅ Used proper headers (### and ####)
+✅ Implemented bullet points (•)
+✅ Added proper spacing between sections
+✅ Used bold text for important information
+✅ Followed the exact structure above
 
-1. Understand the user's question and infer intent when necessary  
-2. Retrieve and synthesize relevant information from all available sources  
-3. Return a complete answer with clear rationale, combining:  
-   * Retrieved product data (structured and unstructured)  
-   * Pretrained domain knowledge  
-   * Public web or regulatory data (if provided)  
-4. Label sources clearly and include a compliance disclaimer where appropriate  
-5. Always provide deeper insights, not just shallow summaries
+### **Your Capabilities**
+- Product analysis and comparison
+- Ingredient safety and efficacy assessment  
+- Regulatory compliance across multiple jurisdictions
+- Market positioning and competitive analysis
+- Pricing strategy and value proposition evaluation
+- Web search integration for current information
 
-### **📤 Output Format**
+### **Data Handling**
+- Use retrieved product data when relevant
+- Supplement with domain knowledge when data is insufficient
+- Clearly distinguish between facts and inferences
+- Acknowledge limitations and suggest follow-up questions
 
-Respond using this format:
-
-`Answer:`  
-`[Complete, helpful answer that combines retrieved data with context and external knowledge.]`
-
-`Rationale:`  
-`[Explain what you found in the data, what you added from external sources, and why.]`
-
-`Sources Used:`  
-`- Retrieved Product Data ✅`  
-`- Pretrained Knowledge ✅ (if used)`  
-`- Web Search ✅ (if used)`
-
-`⚠️ Disclaimer:`  
-`The information presented here is based on publicly available data sources (e.g., Health Canada, Walmart product listings, third-party reports).`    
-`While we aim to provide accurate and helpful insights, this tool is not a substitute for legal, medical, or regulatory advice.`    
-`Always consult qualified professionals before making product or compliance decisions.`
-
-### **⛔ Constraints**
-
-* Do NOT fabricate or infer beyond what is supported by available data  
-* Avoid shallow summaries — your answers must demonstrate depth, evidence, and context  
-* Label all sources clearly — show the difference between retrieved facts, general knowledge, and external sources  
-* When a user asks a regulatory question, include the ⚠️ Disclaimer  
-* Do not generalize regulatory conclusions unless the ingredient's use, form, and application context are clearly known (e.g., "rinse-off vs. leave-on")  
-* If the dataset is insufficient, say so and suggest follow-up steps
-
-### **🔍 Data Quality Assessment**
-
-When retrieved product data lacks **critical information**, you MUST:
-1. **Acknowledge the gap** - Say that data is incomplete, vague, or missing entirely
-2. **Explain the impact** - Tell how missing info limits accuracy or certainty of the answer  
-3. **Suggest next steps** - Offer alternatives, suggest what to look for, or recommend consulting experts
-4. **Provide confidence assessment** - Indicate your confidence level in the analysis based on available data
-"""
+### **⚠️ FINAL REMINDER**
+- **ALWAYS show retrieved products when available**
+- **ALWAYS use professional formatting**
+- **ALWAYS follow the structure template above**
+- **This is NOT optional - it's mandatory for every response**"""
     
     async def generate_research_response(
         self,
@@ -157,48 +261,221 @@ When retrieved product data lacks **critical information**, you MUST:
         product_data: List[Dict[str, Any]] = None,
         vector_results: List[Dict[str, Any]] = None,
         processed_query: Dict[str, Any] = None,
-        web_search_results: List[Dict[str, Any]] = None
+        web_search_results: List[Dict[str, Any]] = None,
+        conversation_history: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """Generate a research response using LLM"""
         
+        # Check circuit breaker first
+        if self._is_circuit_breaker_open():
+            logger.warning("🚫 Circuit breaker is OPEN, using fallback response")
+            return self._create_fallback_response(query, "Service temporarily unavailable due to repeated failures")
+        
+        # Check daily limit
+        if not self._check_daily_limit():
+            logger.warning("⚠️ Daily request limit reached, using fallback response")
+            return self._create_fallback_response(query, "Daily request limit reached")
+        
+        # Retry logic with exponential backoff
+        for attempt in range(self.max_retries):
+            try:
+                logger.info(f"🔄 LLM response generation attempt {attempt + 1}/{self.max_retries}")
+                
+                # Check rate limiting
+                self._check_rate_limit()
+                
+                # Enhanced analysis for System Prompt compliance
+                data_gaps = self._identify_data_gaps(product_data or [], processed_query or {})
+                confidence_score = self._calculate_confidence_score(product_data or [], web_search_results or [], data_gaps)
+                
+                # Prepare context for the LLM
+                llm_context = self._prepare_context(
+                    query=query,
+                    context=context,
+                    product_data=product_data or [],
+                    vector_results=vector_results or [],
+                    processed_query=processed_query or {},
+                    web_search_results=web_search_results or [],
+                    data_gaps=data_gaps,
+                    confidence_score=confidence_score,
+                    conversation_history=conversation_history
+                )
+                
+                # Create the prompt
+                if self.use_langchain:
+                    # LangChain implementation (if available)
+                    response = await self._generate_with_langchain(llm_context)
+                else:
+                    # Direct OpenAI implementation
+                    response = await self._generate_with_openai(llm_context)
+                
+                if response and response.strip():
+                    # Parse the response
+                    parsed_response = self._parse_llm_response(response)
+                    
+                    # Format the response for readability
+                    formatted_answer = self._format_response_for_readability(parsed_response.get("answer", response))
+                    
+                    # Record success
+                    self._record_success()
+                    
+                    # Add metadata
+                    result = {
+                        "answer": formatted_answer,
+                        "rationale": parsed_response.get("rationale", "Generated using available data and domain knowledge"),
+                        "sources_used": parsed_response.get("sources_used", ["Retrieved Product Data", "Pretrained Knowledge"]),
+                        "disclaimer": self._get_regulatory_disclaimer() if self._needs_regulatory_disclaimer(query, processed_query or {}) else None,
+                        "confidence_score": confidence_score,
+                        "data_gaps": data_gaps,
+                        "attempts": attempt + 1,
+                        "timestamp": datetime.utcnow().isoformat()
+                    }
+                    
+                    logger.info(f"✅ LLM response generated successfully on attempt {attempt + 1}")
+                    return result
+                else:
+                    raise ValueError("Empty or invalid LLM response")
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ LLM response generation attempt {attempt + 1} failed: {e}")
+                
+                if attempt == self.max_retries - 1:
+                    # Last attempt failed
+                    self._record_failure()
+                    logger.error(f"❌ All LLM response generation attempts failed")
+                    return self._create_fallback_response(query, str(e))
+                
+                # Calculate delay with exponential backoff
+                delay = min(self.base_delay * (2 ** attempt), self.max_delay)
+                logger.info(f"⏳ Waiting {delay:.1f}s before retry...")
+                await asyncio.sleep(delay)
+        
+        # Should never reach here, but just in case
+        return self._create_fallback_response(query, "Unexpected error in response generation")
+    
+    async def _generate_with_openai(self, llm_context: str) -> str:
+        """Generate response using direct OpenAI API"""
         try:
-            # Enhanced analysis for System Prompt compliance
-            data_gaps = self._identify_data_gaps(product_data or [], processed_query or {})
-            confidence_score = self._calculate_confidence_score(product_data or [], web_search_results or [], data_gaps)
-            
-            # Prepare context for the LLM
-            llm_context = self._prepare_context(
-                query=query,
-                context=context,
-                product_data=product_data or [],
-                vector_results=vector_results or [],
-                processed_query=processed_query or {},
-                web_search_results=web_search_results or [],
-                data_gaps=data_gaps,
-                confidence_score=confidence_score
-            )
-            
-            # Create the prompt
-            if self.use_langchain:
-                response = await self._generate_with_langchain(query, llm_context)
+            if self.use_azure:
+                # Azure OpenAI
+                client = openai.AzureOpenAI(
+                    api_key=self.azure_api_key,
+                    api_version=self.azure_api_version,
+                    azure_endpoint=self.azure_endpoint
+                )
+                
+                response = client.chat.completions.create(
+                    model=self.azure_deployment,
+                    messages=[
+                        {"role": "system", "content": self.system_prompt},
+                        {"role": "user", "content": llm_context}
+                    ],
+                    max_tokens=2000,
+                    temperature=0.3
+                )
+                
+                return response.choices[0].message.content
+                
             else:
-                response = await self._generate_with_openai(query, llm_context)
-            
-            # Parse the response
-            parsed_response = self._parse_response(response)
-            
-            # Determine if disclaimer is needed
-            needs_disclaimer = self._needs_regulatory_disclaimer(query, processed_query)
-            if needs_disclaimer:
-                parsed_response["disclaimer"] = self._get_regulatory_disclaimer()
-            
-            logger.info("✅ Generated LLM response successfully")
-            return parsed_response
+                # Regular OpenAI
+                response = openai.ChatCompletion.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": self.system_prompt},
+                        {"role": "user", "content": llm_context}
+                    ],
+                    max_tokens=2000,
+                    temperature=0.3
+                )
+                
+                return response.choices[0].message.content
             
         except Exception as e:
-            logger.error(f"❌ Error generating LLM response: {e}")
-            # Return fallback response
-            return self._create_fallback_response(query, str(e))
+            logger.error(f"❌ OpenAI API call failed: {e}")
+            raise e
+    
+    async def _generate_with_langchain(self, llm_context: str) -> str:
+        """Generate response using LangChain (placeholder for future implementation)"""
+        # This would be implemented when LangChain is added
+        logger.warning("⚠️ LangChain not implemented, falling back to OpenAI")
+        return await self._generate_with_openai(llm_context)
+    
+    async def generate_structured_response(
+        self,
+        prompt: str,
+        max_tokens: int = 500,
+        temperature: float = 0.1
+    ) -> str:
+        """Generate structured response (used by filter extractor)"""
+        
+        # Check circuit breaker
+        if self._is_circuit_breaker_open():
+            raise Exception("Service temporarily unavailable due to repeated failures")
+        
+        # Check daily limit
+        if not self._check_daily_limit():
+            raise Exception("Daily request limit reached")
+        
+        # Retry logic
+        for attempt in range(self.max_retries):
+            try:
+                logger.debug(f"🔄 Structured response attempt {attempt + 1}/{self.max_retries}")
+                
+                # Check rate limiting
+                self._check_rate_limit()
+                
+                if self.use_azure:
+                    # Azure OpenAI
+                    client = openai.AzureOpenAI(
+                        api_key=self.azure_api_key,
+                        api_version=self.azure_api_version,
+                        azure_endpoint=self.azure_endpoint
+                    )
+                    
+                    response = client.chat.completions.create(
+                        model=self.azure_deployment,
+                        messages=[
+                            {"role": "system", "content": "You are a helpful assistant that provides structured responses."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        max_tokens=max_tokens,
+                        temperature=temperature
+                    )
+                    
+                    result = response.choices[0].message.content
+                    
+                else:
+                    # Regular OpenAI
+                    response = openai.ChatCompletion.create(
+                        model="gpt-3.5-turbo",
+                        messages=[
+                            {"role": "system", "content": "You are a helpful assistant that provides structured responses."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        max_tokens=max_tokens,
+                        temperature=temperature
+                    )
+                    
+                    result = response.choices[0].message.content
+                
+                if result:
+                    self._record_success()
+                    return result
+                else:
+                    raise ValueError("Empty response from OpenAI")
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ Structured response attempt {attempt + 1} failed: {e}")
+                
+                if attempt == self.max_retries - 1:
+                    self._record_failure()
+                    raise e
+                
+                # Exponential backoff
+                delay = min(self.base_delay * (2 ** attempt), self.max_delay)
+                await asyncio.sleep(delay)
+        
+        raise Exception("All attempts failed")
     
     def _prepare_context(
         self,
@@ -209,11 +486,45 @@ When retrieved product data lacks **critical information**, you MUST:
         processed_query: Dict,
         web_search_results: List[Dict] = None,
         data_gaps: List[str] = None,
-        confidence_score: float = 0.0
+        confidence_score: float = 0.0,
+        conversation_history: Optional[List[Dict]] = None
     ) -> str:
-        """Prepare context string for LLM"""
+        """Prepare context string for LLM with smart context retention"""
         
         context_parts = []
+        
+        # SMART CONTEXT RETENTION: Only clear irrelevant context
+        if conversation_history:
+            # Check if this is a follow-up to the same topic
+            is_follow_up = self._is_follow_up_question(query, conversation_history)
+            if is_follow_up:
+                context_parts.append("**🔄 FOLLOW-UP QUESTION - Maintaining relevant context**")
+            else:
+                context_parts.append("**🔄 NEW TOPIC - Previous context cleared**")
+        else:
+            context_parts.append("**🔄 NEW SESSION - No previous context**")
+        context_parts.append("")
+        
+        # ALWAYS start with the user's query - this is the most important thing
+        context_parts.append("**🎯 USER'S QUESTION:**")
+        context_parts.append(f"'{query}'")
+        context_parts.append("")
+        
+        # Smart context retention based on conversation flow
+        if conversation_history and self._is_follow_up_question(query, conversation_history):
+            # Keep relevant context from previous questions in the same conversation
+            relevant_context = self._extract_relevant_context(query, conversation_history)
+            if relevant_context:
+                context_parts.append("**📚 Relevant Context from Previous Questions:**")
+                context_parts.append(relevant_context)
+                context_parts.append("")
+        
+        context_parts.append("**⚠️ REMEMBER: Answer this specific question above. Do not get distracted by irrelevant data.**")
+        if conversation_history:
+            context_parts.append("**⚠️ Use relevant context from this conversation, but ignore unrelated topics.**")
+        else:
+            context_parts.append("**⚠️ IGNORE any previous conversations or context not related to this question.**")
+        context_parts.append("")
         
         # Add user context
         if context:
@@ -251,19 +562,50 @@ When retrieved product data lacks **critical information**, you MUST:
             
             context_parts.append("")
         
-        # Add product data
+        # Add product data with relevance check
         if product_data:
             context_parts.append("**Retrieved Product Data:**")
-            for i, product in enumerate(product_data[:5]):  # Limit to first 5 products
-                context_parts.append(f"{i+1}. **{product.get('product_name', 'Unknown Product')}**")
-                if "brand" in product:
-                    context_parts.append(f"   - Brand: {product['brand']}")
-                if "category" in product:
-                    context_parts.append(f"   - Category: {product['category']}")
-                if "price" in product:
-                    context_parts.append(f"   - Price: ${product['price']}")
-                if "availability" in product:
-                    context_parts.append(f"   - Availability: {product['availability']}")
+            context_parts.append(f"Found {len(product_data)} products in database.")
+            
+            # Check if any products are relevant to the user's query
+            relevant_products = []
+            query_lower = query.lower()
+            
+            # Extract key terms from the user's query for relevance checking
+            query_terms = [term.lower() for term in query.split() if len(term) > 3]  # Words longer than 3 chars
+            
+            for product in product_data:
+                product_name = product.get('product_name', '').lower()
+                product_desc = product.get('description', '').lower()
+                product_brand = product.get('brand', '').lower()
+                product_category = product.get('category', '').lower()
+                
+                # Check if product is relevant to the user's query
+                is_relevant = False
+                for term in query_terms:
+                    if (term in product_name or term in product_desc or 
+                        term in product_brand or term in product_category):
+                        is_relevant = True
+                        break
+                
+                if is_relevant:
+                    relevant_products.append(product)
+            
+            if relevant_products:
+                context_parts.append(f"✅ Found {len(relevant_products)} products that may be relevant to your question:")
+                for i, product in enumerate(relevant_products[:3]):  # Limit to first 3 relevant
+                    context_parts.append(f"{i+1}. **{product.get('product_name', 'Unknown Product')}**")
+                    if "brand" in product:
+                        context_parts.append(f"   - Brand: {product['brand']}")
+                    if "category" in product:
+                        context_parts.append(f"   - Category: {product['category']}")
+                    if "price" in product:
+                        context_parts.append(f"   - Price: ${product['price']}")
+                    if "availability" in product:
+                        context_parts.append(f"   - Availability: {product['availability']}")
+                    context_parts.append("")
+            else:
+                context_parts.append(f"⚠️ None of the retrieved products appear to directly address your question: '{query}'")
                 context_parts.append("")
         
         # Add vector search results if available
@@ -302,80 +644,13 @@ When retrieved product data lacks **critical information**, you MUST:
             
             context_parts.append("")
         
+        # Final reminder - DYNAMIC based on user's actual question
+        context_parts.append(f"**🎯 FINAL REMINDER: Answer the user's question: '{query}'**")
+        context_parts.append("**Do NOT answer a different question. Stay focused on what the user actually asked.**")
+        
         return "\n".join(context_parts)
     
-    async def _generate_with_langchain(self, query: str, context: str) -> str:
-        """Generate response using LangChain"""
-        try:
-            # Create prompt template
-            messages = [
-                SystemMessage(content=self.system_prompt),
-                HumanMessage(content=f"Context:\n{context}\n\nQuery: {query}")
-            ]
-            
-            # Generate response
-            response = await self.chat_model.agenerate([messages])
-            return response.generations[0][0].text
-            
-        except Exception as e:
-            logger.error(f"LangChain generation failed: {e}")
-            # Fallback to direct OpenAI
-            return await self._generate_with_openai(query, context)
-    
-    async def _generate_with_openai(self, query: str, context: str) -> str:
-        """Generate response using OpenAI or Azure OpenAI API"""
-        try:
-            # For testing without API key, return a mock response
-            if self.openai_api_key == "demo_mode" or self.openai_api_key == "your_openai_api_key_here":
-                return self._create_mock_response(query, context)
-            
-            if self.use_azure:
-                # Use Azure OpenAI
-                from openai import AzureOpenAI
-                
-                client = AzureOpenAI(
-                    api_key=self.azure_api_key,
-                    api_version=self.azure_api_version,
-                    azure_endpoint=self.azure_endpoint
-                )
-                
-                response = client.chat.completions.create(
-                    model=self.azure_deployment,  # This is your deployment name
-                    messages=[
-                        {"role": "system", "content": self.system_prompt},
-                        {"role": "user", "content": f"Context:\n{context}\n\nQuery: {query}"}
-                    ],
-                    temperature=0.3,
-                    max_tokens=1500
-                )
-                
-                logger.info(f"✅ Azure OpenAI response generated using deployment: {self.azure_deployment}")
-                
-            else:
-                # Use regular OpenAI
-                from openai import OpenAI
-                client = OpenAI(api_key=self.openai_api_key)
-                
-                response = client.chat.completions.create(
-                    model="gpt-4",
-                    messages=[
-                        {"role": "system", "content": self.system_prompt},
-                        {"role": "user", "content": f"Context:\n{context}\n\nQuery: {query}"}
-                    ],
-                    temperature=0.3,
-                    max_tokens=1500
-                )
-                
-                logger.info("✅ OpenAI response generated")
-            
-            return response.choices[0].message.content
-            
-        except Exception as e:
-            logger.error(f"LLM generation failed: {e}")
-            # Return mock response for testing
-            return self._create_mock_response(query, context)
-    
-    def _parse_response(self, response: str) -> Dict[str, Any]:
+    def _parse_llm_response(self, response: str) -> Dict[str, Any]:
         """Parse LLM response into structured format"""
         
         # Simple parsing - you can make this more sophisticated
@@ -533,3 +808,77 @@ Note: This is a demo response generated without OpenAI API. For full functionali
             return "Low"
         else:
             return "Very Low"
+
+    def _is_follow_up_question(self, current_query: str, conversation_history: List[Dict]) -> bool:
+        """Determine if current query is a follow-up to the same conversation topic"""
+        if not conversation_history:
+            return False
+        
+        # Get the last question from conversation history
+        last_question = conversation_history[-1].get('query', '').lower()
+        current_query_lower = current_query.lower()
+        
+        # Extract key topic words from both questions
+        last_topics = self._extract_topic_keywords(last_question)
+        current_topics = self._extract_topic_keywords(current_query)
+        
+        # Check if there's topic overlap
+        topic_overlap = len(last_topics.intersection(current_topics))
+        
+        # Check for follow-up indicators
+        follow_up_indicators = [
+            'can you', 'could you', 'please', 'also', 'additionally', 'furthermore',
+            'what about', 'how about', 'tell me more', 'give me', 'show me',
+            'examples', 'specific', 'details', 'more', 'other', 'different'
+        ]
+        
+        has_follow_up_language = any(indicator in current_query_lower for indicator in follow_up_indicators)
+        
+        # Consider it a follow-up if there's topic overlap OR follow-up language
+        return topic_overlap > 0 or has_follow_up_language
+    
+    def _extract_topic_keywords(self, query: str) -> set:
+        """Extract key topic words from a query"""
+        # Remove common words and extract meaningful terms
+        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'can', 'may', 'might', 'must', 'shall'}
+        
+        words = query.lower().split()
+        topic_words = {word for word in words if len(word) > 3 and word not in stop_words}
+        
+        return topic_words
+    
+    def _extract_relevant_context(self, current_query: str, conversation_history: List[Dict]) -> str:
+        """Extract relevant context from conversation history for the current query"""
+        relevant_context = []
+        current_topics = self._extract_topic_keywords(current_query)
+        
+        for i, entry in enumerate(conversation_history[-3:]):  # Look at last 3 exchanges
+            question = entry.get('query', '')
+            answer = entry.get('answer', '')
+            
+            # Check if this exchange is relevant to current query
+            question_topics = self._extract_topic_keywords(question)
+            if current_topics.intersection(question_topics):
+                # Extract key insights from relevant answers
+                key_points = self._extract_key_insights(answer)
+                if key_points:
+                    relevant_context.append(f"**Previous Q{i+1}:** {question}")
+                    relevant_context.append(f"**Key insights:** {key_points}")
+                    relevant_context.append("")
+        
+        return "\n".join(relevant_context) if relevant_context else ""
+    
+    def _extract_key_insights(self, answer: str) -> str:
+        """Extract key insights from an answer for context retention"""
+        # Simple extraction - look for key phrases and numbers
+        lines = answer.split('\n')
+        key_lines = []
+        
+        for line in lines:
+            line = line.strip()
+            # Look for lines with key information
+            if any(keyword in line.lower() for keyword in ['price', 'brand', 'product', 'ingredient', 'analysis', 'found', 'data', 'median', 'average', 'range']):
+                if len(line) < 100:  # Keep it concise
+                    key_lines.append(line)
+        
+        return "; ".join(key_lines[:3]) if key_lines else ""  # Limit to 3 key points

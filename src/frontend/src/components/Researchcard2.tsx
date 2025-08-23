@@ -2,11 +2,31 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { config } from "../config/config";
+import ClarificationCard from "./ClarificationCard";
 
 interface ResearchContext {
   role: string;
   objective: string;
   topic: string;
+}
+
+interface ClarificationOption {
+  text: string;
+  description: string;
+  suggested_query: string;
+  category: string;
+}
+
+interface ClarificationResponse {
+  query: string;
+  clarification_question: string;
+  options: ClarificationOption[];
+  issues: string[];
+  confidence: number;
+  fallback_interpretation?: string;
+  session_id: string;
+  timestamp: string;
+  response_type: string;
 }
 
 interface ResearchResponse {
@@ -18,13 +38,17 @@ interface ResearchResponse {
   session_id: string;
   timestamp: string;
   retrieved_products?: any[];
+  response_type: string;
 }
+
+type QueryResponse = ResearchResponse | ClarificationResponse;
 
 const Researchcard2 = () => {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [context, setContext] = useState<ResearchContext | null>(null);
+  const [clarificationResponse, setClarificationResponse] = useState<ClarificationResponse | null>(null);
   const navigate = useNavigate();
 
   // Load context from previous step
@@ -72,19 +96,120 @@ const Researchcard2 = () => {
         throw new Error(errorData.detail || 'Failed to submit query');
       }
 
-      const result: ResearchResponse = await response.json();
+      const result: QueryResponse = await response.json();
       
-      // Store the result for the next page
-      localStorage.setItem('researchResult', JSON.stringify(result));
-      localStorage.setItem('research_session_id', result.session_id);
-      
-      // Navigate to results page (you'll need to create this)
-      navigate("/research-results");
+      // Check if it's a clarification response
+      if ('response_type' in result && result.response_type === 'clarification') {
+        // Show clarification options
+        setClarificationResponse(result as ClarificationResponse);
+        localStorage.setItem('research_session_id', result.session_id);
+      } else {
+        // It's a research response, store and navigate
+        const researchResult = result as ResearchResponse;
+        localStorage.setItem('researchResult', JSON.stringify(researchResult));
+        localStorage.setItem('research_session_id', researchResult.session_id);
+        navigate("/reportcard");
+      }
       
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
       setError(errorMessage);
       console.error('Research query failed:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle clarification option selection
+  const handleClarificationOption = async (suggestedQuery: string) => {
+    setQuery(suggestedQuery);
+    setClarificationResponse(null);
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const API_BASE_URL = config.apiUrl.replace('/api/v1', '');
+      
+      const response = await fetch(`${API_BASE_URL}/api/v1/research/query/clarified`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: suggestedQuery,
+          context: context ? {
+            role: context.role,
+            objective: context.objective,
+            topic: context.topic
+          } : undefined,
+          session_id: localStorage.getItem('research_session_id') || undefined,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to submit clarified query');
+      }
+
+      const result: ResearchResponse = await response.json();
+      
+      // Store the result and navigate
+      localStorage.setItem('researchResult', JSON.stringify(result));
+      localStorage.setItem('research_session_id', result.session_id);
+      navigate("/reportcard");
+      
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
+      setError(errorMessage);
+      console.error('Clarified query failed:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle proceeding with fallback interpretation
+  const handleProceedAnyway = async () => {
+    if (!clarificationResponse?.fallback_interpretation) return;
+    
+    setClarificationResponse(null);
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const API_BASE_URL = config.apiUrl.replace('/api/v1', '');
+      
+      const response = await fetch(`${API_BASE_URL}/api/v1/research/query/clarified`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: query, // Use original query
+          context: context ? {
+            role: context.role,
+            objective: context.objective,
+            topic: context.topic
+          } : undefined,
+          session_id: localStorage.getItem('research_session_id') || undefined,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to submit query');
+      }
+
+      const result: ResearchResponse = await response.json();
+      
+      // Store the result and navigate
+      localStorage.setItem('researchResult', JSON.stringify(result));
+      localStorage.setItem('research_session_id', result.session_id);
+      navigate("/reportcard");
+      
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
+      setError(errorMessage);
+      console.error('Fallback query failed:', err);
     } finally {
       setLoading(false);
     }
@@ -195,6 +320,18 @@ const Researchcard2 = () => {
               <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
               <span className="text-sm">Processing your research query...</span>
             </div>
+          </div>
+        )}
+
+        {/* Clarification Card */}
+        {clarificationResponse && (
+          <div className="mt-6 max-w-4xl mx-auto">
+            <ClarificationCard
+              clarification={clarificationResponse}
+              onOptionSelect={handleClarificationOption}
+              onProceedAnyway={handleProceedAnyway}
+              loading={loading}
+            />
           </div>
         )}
       </div>

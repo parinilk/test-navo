@@ -25,6 +25,8 @@ from api.research import router as research_router
 from api.products import router as products_router
 from api.analytics import router as analytics_router
 from models.database import connect_to_mongo, close_mongo_connection
+from models.pinecone_vector_store import pinecone_vector_store
+from models.dataset_manager import dataset_manager
 
 # Pinecone imports
 PINECONE_AVAILABLE = False
@@ -78,7 +80,21 @@ async def startup_event():
         print("🔧 Backend will run without MongoDB (some features limited)")
         db_client = None
     
-    # Initialize vector store (Pinecone or local fallback)
+    # Initialize Pinecone vector store
+    print("🔍 Initializing Pinecone vector store...")
+    pinecone_ready = await pinecone_vector_store.initialize()
+    if pinecone_ready:
+        print("✅ Pinecone vector store connected successfully!")
+        vector_store = pinecone_vector_store
+    else:
+        print("⚠️ Pinecone connection failed, using fallback vector store")
+    
+    # Initialize dataset manager
+    print("🗄️ Initializing dataset manager...")
+    await dataset_manager.initialize()
+    print("✅ Dataset manager initialized!")
+    
+    # Legacy Pinecone initialization (keeping for compatibility)
     if PINECONE_AVAILABLE:
         try:
             # Initialize Pinecone

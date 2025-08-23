@@ -1,19 +1,52 @@
 
 
 import { useEffect, useRef, useState } from "react";
+import config from "../config/config";
 
 interface Message {
   sender: "User" | "LLM";
   text: string;
 }
 
-const initialMessages: Message[] = [
-  { sender: "User", text: "What is the capital of France?" },
-  { sender: "LLM", text: "The capital of France is Paris." }
-];
+interface WebSearchResult {
+  title: string;
+  source: string;
+  snippet: string;
+  url: string;
+}
 
-const Question1 = ({ onPin }: { onPin: (text: string) => void }) => {
-  const [messages, setMessages] = useState<Message[]>(initialMessages);
+interface ResearchResult {
+  query: string;
+  answer: string;
+  rationale: string;
+  sources_used: string[];  // Fixed: match backend field name
+  disclaimer?: string;
+  session_id: string;
+  timestamp: string;
+  retrieved_products?: any[];
+  web_search_results?: WebSearchResult[];  // Added: web search results
+  confidence_score?: number;               // Added: confidence score
+  data_gaps?: string[];                   // Added: data gaps
+  analysis_complexity?: string;            // Added: analysis complexity
+  regulatory_analysis?: any;               // Added: regulatory analysis
+}
+
+const Question1 = ({ onPin, researchResult }: { onPin: (text: string) => void; researchResult: ResearchResult | null }) => {
+  // Initialize messages based on research result or use defaults
+  const getInitialMessages = (): Message[] => {
+    if (researchResult) {
+      return [
+        { sender: "User", text: researchResult.query },
+        { sender: "LLM", text: researchResult.answer }  // Changed: use answer instead of rationale
+      ];
+    }
+    return [
+      { sender: "User", text: "What is the rationale behind this?" },
+      { sender: "LLM", text: "Here's the detailed reasoning..." }
+    ];
+  };
+  
+  const [messages, setMessages] = useState<Message[]>(getInitialMessages());
   const [selectedText, setSelectedText] = useState("");
   const [showPin, setShowPin] = useState(false);
   const [pinPosition, setPinPosition] = useState({ x: 0, y: 0 });
@@ -21,8 +54,21 @@ const Question1 = ({ onPin }: { onPin: (text: string) => void }) => {
   const [editIndex, setEditIndex] = useState<number | null>(null);
   const [editText, setEditText] = useState("");
   const [showConfirm, setShowConfirm] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);  // Added: toggle for detailed view
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+
+  // Update messages when researchResult changes
+  useEffect(() => {
+    const initialMessages: Message[] = researchResult ? [
+      { sender: "User", text: researchResult.query },
+      { sender: "LLM", text: researchResult.answer }  // Changed: use answer
+    ] : [
+      { sender: "User", text: "What is the rationale behind this?" },
+      { sender: "LLM", text: "Here's the detailed reasoning..." }
+    ];
+    setMessages(initialMessages);
+  }, [researchResult]);
 
   // --- scroll to bottom whenever messages change ---
   useEffect(() => {
@@ -55,15 +101,195 @@ const Question1 = ({ onPin }: { onPin: (text: string) => void }) => {
     window.getSelection()?.removeAllRanges();
   };
 
-  const handleSend = () => {
+  // Enhanced message rendering with detailed view
+  const renderLLMMessage = (message: Message, index: number) => {
+    if (message.sender === "LLM" && researchResult) {
+      return (
+        <div className="bg-gray-100 p-4 rounded-lg mb-4 max-w-[80%]">
+          <div className="font-semibold text-gray-700 mb-2">LLM:</div>
+          
+          {/* Main Answer */}
+          <div className="text-gray-800 mb-4">
+            {message.text}
+          </div>
+          
+          {/* Toggle Details Button */}
+          <button
+            onClick={() => setShowDetails(!showDetails)}
+            className="text-blue-600 hover:text-blue-800 text-sm underline mb-2"
+          >
+            {showDetails ? "Hide Details" : "Show Full Report"}
+          </button>
+          
+          {/* Detailed View */}
+          {showDetails && (
+            <div className="border-t pt-4 space-y-4">
+              
+              {/* Rationale */}
+              {researchResult.rationale && (
+                <div>
+                  <h4 className="font-semibold text-gray-700 mb-2">Rationale:</h4>
+                  <p className="text-gray-600 text-sm">{researchResult.rationale}</p>
+                </div>
+              )}
+              
+              {/* Sources Used */}
+              {researchResult.sources_used && researchResult.sources_used.length > 0 && (
+                <div>
+                  <h4 className="font-semibold text-gray-700 mb-2">Sources Used:</h4>
+                  <ul className="text-gray-600 text-sm space-y-1">
+                    {researchResult.sources_used.map((source, idx) => (
+                      <li key={idx} className="flex items-center">
+                        <span className="text-green-500 mr-2">✅</span>
+                        {source}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              
+              {/* Web Search Results */}
+              {researchResult.web_search_results && researchResult.web_search_results.length > 0 && (
+                <div>
+                  <h4 className="font-semibold text-gray-700 mb-2">Web Search Results:</h4>
+                  <div className="space-y-3">
+                    {researchResult.web_search_results.map((result, idx) => (
+                      <div key={idx} className="bg-white p-3 rounded border">
+                        <h5 className="font-medium text-gray-800 mb-1">{result.title}</h5>
+                        <p className="text-gray-600 text-sm mb-1">Source: {result.source}</p>
+                        {result.snippet && (
+                          <p className="text-gray-500 text-xs">{result.snippet}</p>
+                        )}
+                        {result.url && (
+                          <a 
+                            href={result.url} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="text-blue-600 hover:text-blue-800 text-xs underline"
+                          >
+                            View Source
+                          </a>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              {/* Confidence Score & Data Gaps */}
+              <div className="flex gap-4">
+                {researchResult.confidence_score !== undefined && (
+                  <div>
+                    <h4 className="font-semibold text-gray-700 mb-2">Confidence Score:</h4>
+                    <div className="flex items-center">
+                      <div className="w-20 bg-gray-200 rounded-full h-2 mr-2">
+                        <div 
+                          className="bg-blue-600 h-2 rounded-full" 
+                          style={{ width: `${researchResult.confidence_score * 100}%` }}
+                        ></div>
+                      </div>
+                      <span className="text-sm text-gray-600">
+                        {Math.round(researchResult.confidence_score * 100)}%
+                      </span>
+                    </div>
+                  </div>
+                )}
+                
+                {researchResult.data_gaps && researchResult.data_gaps.length > 0 && (
+                  <div>
+                    <h4 className="font-semibold text-gray-700 mb-2">Data Gaps:</h4>
+                    <ul className="text-gray-600 text-sm space-y-1">
+                      {researchResult.data_gaps.map((gap, idx) => (
+                        <li key={idx} className="flex items-center">
+                          <span className="text-yellow-500 mr-2">⚠️</span>
+                          {gap}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+              
+              {/* Disclaimer */}
+              {researchResult.disclaimer && (
+                <div className="bg-yellow-50 border border-yellow-200 rounded p-3">
+                  <h4 className="font-semibold text-yellow-800 mb-2">⚠️ Disclaimer:</h4>
+                  <p className="text-yellow-700 text-sm">{researchResult.disclaimer}</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    }
+    
+    // Default message rendering
+    return (
+      <div className={`p-4 rounded-lg mb-4 max-w-[80%] ${
+        message.sender === "User" 
+          ? "bg-blue-100 ml-auto" 
+          : "bg-gray-100"
+      }`}>
+        <div className={`font-semibold mb-2 ${
+          message.sender === "User" ? "text-blue-700" : "text-gray-700"
+        }`}>
+          {message.sender}:
+        </div>
+        <div className="text-gray-800">{message.text}</div>
+      </div>
+    );
+  };
+
+  const handleSend = async () => {
     if (inputText.trim() === "") return;
+    
     const userMessage: Message = { sender: "User", text: inputText.trim() };
-    const llmResponse: Message = {
-      sender: "LLM",
-      text: "This is a static LLM response."
-    };
-    setMessages((prev) => [...prev, userMessage, llmResponse]);
+    setMessages((prev) => [...prev, userMessage]);
     setInputText("");
+    
+    // Show loading state
+    const loadingMessage: Message = { sender: "LLM", text: "Thinking..." };
+    setMessages((prev) => [...prev, loadingMessage]);
+    
+    try {
+      // Use the research API to get a real response
+      const API_BASE_URL = config.apiUrl.replace('/api/v1', '');
+      const response = await fetch(`${API_BASE_URL}/api/v1/research/query`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: inputText.trim(),
+          context: researchResult ? {
+            previous_query: researchResult.query,
+            session_id: researchResult.session_id
+          } : undefined,
+          session_id: researchResult?.session_id || undefined,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to get response');
+      }
+
+      const result = await response.json();
+      
+      // Replace loading message with actual response
+      setMessages((prev) => 
+        prev.slice(0, -1).concat([{ sender: "LLM", text: result.answer }])
+      );
+      
+    } catch (error) {
+      console.error('Error getting LLM response:', error);
+      // Replace loading message with error message
+      setMessages((prev) => 
+        prev.slice(0, -1).concat([{ 
+          sender: "LLM", 
+          text: "Sorry, I couldn't process your question right now. Please try again." 
+        }])
+      );
+    }
   };
 
   const handleEditClick = (index: number) => {
@@ -101,11 +327,7 @@ const Question1 = ({ onPin }: { onPin: (text: string) => void }) => {
             }`}
           >
             {msg.sender === "LLM" ? (
-              <div className="flex flex-col w-full items-start">
-                <div className="max-w-[70%] px-4 py-2 rounded-lg bg-gray-100 text-sm text-left">
-                  <strong>{msg.sender}:</strong> {msg.text}
-                </div>
-              </div>
+              renderLLMMessage(msg, idx)
             ) : (
               <div className="flex flex-col items-end max-w-[70%]">
                 <div className="px-4 py-2 rounded-lg bg-blue-100 text-sm text-right">
@@ -162,6 +384,12 @@ const Question1 = ({ onPin }: { onPin: (text: string) => void }) => {
           placeholder="Please add context to your question"
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              handleSend();
+            }
+          }}
           className="flex-1 bg-transparent outline-none text-sm px-3 py-2"
         />
         <button className="ml-2 p-2" onClick={handleSend}>

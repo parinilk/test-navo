@@ -1,12 +1,29 @@
 
 
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import Question1 from "../Questions/Question1";
 import Question2 from "../Questions/Question2";
 import Question3 from "../Questions/Question3";
 import Question4 from "../Questions/Question4";
 import Question5 from "../Questions/Question5";
+
+interface ResearchResult {
+  query: string;
+  answer: string;
+  rationale: string;
+  sources_used: string[];  // Fixed: match backend field name
+  disclaimer?: string;
+  session_id: string;
+  timestamp: string;
+  retrieved_products?: any[];
+  web_search_results?: any[];  // Added: web search results
+  confidence_score?: number;   // Added: confidence score
+  data_gaps?: string[];        // Added: data gaps
+  analysis_complexity?: string; // Added: analysis complexity
+  regulatory_analysis?: any;    // Added: regulatory analysis
+}
 
 const Reportcard = () => {
   const [activeTab, setActiveTab] = useState(1);
@@ -14,6 +31,21 @@ const Reportcard = () => {
   const [editIndex, setEditIndex] = useState<number | null>(null);
   const [editText, setEditText] = useState("");
   const [editedIndices, setEditedIndices] = useState<number[]>([]);
+  const [researchResult, setResearchResult] = useState<ResearchResult | null>(null);
+  const navigate = useNavigate();
+
+  // Load research result from localStorage when component mounts
+  useEffect(() => {
+    const savedResult = localStorage.getItem('researchResult');
+    if (savedResult) {
+      try {
+        const result = JSON.parse(savedResult);
+        setResearchResult(result);
+      } catch (e) {
+        console.error('Failed to parse research result:', e);
+      }
+    }
+  }, []);
 
   const handlePin = (text: string) => {
     setPinnedResults((prev) => [...prev, `Q-${activeTab}: ${text}`]);
@@ -47,15 +79,15 @@ const Reportcard = () => {
   const renderQuestion = () => {
     switch (activeTab) {
       case 1:
-        return <Question1 onPin={handlePin} />;
+        return <Question1 onPin={handlePin} researchResult={researchResult} />;
       case 2:
-        return <Question2 onPin={handlePin} />;
+        return <Question2 onPin={handlePin} researchResult={researchResult} />;
       case 3:
-        return <Question3 onPin={handlePin} />;
+        return <Question3 onPin={handlePin} researchResult={researchResult} />;
       case 4:
-        return <Question4 onPin={handlePin} />;
+        return <Question4 onPin={handlePin} researchResult={researchResult} />;
       case 5:
-        return <Question5 onPin={handlePin} />;
+        return <Question5 onPin={handlePin} researchResult={researchResult} />;
       default:
         return null;
     }
@@ -201,7 +233,17 @@ const Reportcard = () => {
         {/* Bottom-right Action Button */}
         <button
           className="absolute bottom-4 right-4 px-4 py-2 bg-blue-600 text-white rounded shadow hover:bg-blue-700"
-          onClick={() => alert("You clicked the bottom-right button!")}
+          onClick={() => {
+            // Store pinned results for report generation
+            localStorage.setItem('pinnedResults', JSON.stringify(pinnedResults));
+            localStorage.setItem('researchContext', JSON.stringify({
+              query: researchResult?.query || '',
+              timestamp: researchResult?.timestamp || new Date().toISOString(),
+              session_id: researchResult?.session_id || ''
+            }));
+            // Navigate to main report page
+            navigate('/report');
+          }}
         >
           Generate Report
         </button>
