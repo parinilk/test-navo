@@ -102,7 +102,7 @@ const Question1 = ({ onPin, researchResult }: { onPin: (text: string) => void; r
   };
 
   // Enhanced message rendering with detailed view
-  const renderLLMMessage = (message: Message, index: number) => {
+  const renderLLMMessage = (message: Message) => {
     if (message.sender === "LLM" && researchResult) {
       return (
         <div className="bg-gray-100 p-4 rounded-lg mb-4 max-w-[80%]">
@@ -327,7 +327,7 @@ const Question1 = ({ onPin, researchResult }: { onPin: (text: string) => void; r
             }`}
           >
             {msg.sender === "LLM" ? (
-              renderLLMMessage(msg, idx)
+              renderLLMMessage(msg)
             ) : (
               <div className="flex flex-col items-end max-w-[70%]">
                 <div className="px-4 py-2 rounded-lg bg-blue-100 text-sm text-right">
