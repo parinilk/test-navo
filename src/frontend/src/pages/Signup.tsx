@@ -187,12 +187,12 @@ const Signup: React.FC = () => {
           <div className="hidden lg:block">
             <AnimatedHeadline
               title="Join Navo Today"
-              subtitle="Start your AI-powered research journey and unlock the full potential of intelligent research collaboration."
+              subtitle="Start your AI-powered beauty and wellness research journey and unlock the full potential of intelligent beauty research collaboration."
               features={[
-                "Free account with premium features",
-                "Unlimited research projects",
-                "24/7 AI assistance",
-                "Advanced collaboration tools"
+                "Free account with premium beauty insights",
+                "Unlimited beauty research projects",
+                "24/7 AI beauty research assistance",
+                "Advanced beauty trend collaboration tools"
               ]}
             />
           </div>
@@ -201,11 +201,11 @@ const Signup: React.FC = () => {
           <div className="lg:hidden mb-8">
             <AnimatedHeadline
               title="Join Navo Today"
-              subtitle="Start your AI-powered research journey"
+              subtitle="Start your AI-powered beauty and wellness research journey"
               features={[
-                "Free account with premium features",
-                "Unlimited research projects",
-                "24/7 AI assistance"
+                "Free account with premium beauty insights",
+                "Unlimited beauty research projects",
+                "24/7 AI beauty research assistance"
               ]}
             />
           </div>
@@ -214,7 +214,7 @@ const Signup: React.FC = () => {
           <div className="w-full flex justify-center">
             <AnimatedForm
               title="Create Account"
-              subtitle="Join thousands of researchers using Navo"
+              subtitle="Join thousands of beauty researchers using Navo"
             >
               {/* Error Message */}
               {error && (
@@ -427,7 +427,7 @@ const Signup: React.FC = () => {
                 <p className="text-white/80">
                   Already have an account?{' '}
                   <Link to="/login" className="text-purple-300 hover:text-purple-200 font-medium transition-colors">
-                    Sign in here
+                    Sign in to your beauty research account
                   </Link>
                 </p>
               </div>
