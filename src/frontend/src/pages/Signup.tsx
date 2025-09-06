@@ -75,10 +75,10 @@ const Signup: React.FC = () => {
   };
 
   const getPasswordStrengthColor = (strength: number): string => {
-    if (strength <= 2) return 'bg-red-500';
-    if (strength <= 3) return 'bg-yellow-500';
-    if (strength <= 4) return 'bg-blue-500';
-    return 'bg-green-500';
+    if (strength <= 2) return 'bg-red-400';
+    if (strength <= 3) return 'bg-yellow-400';
+    if (strength <= 4) return 'bg-blue-400';
+    return 'bg-green-400';
   };
 
   const getPasswordStrengthText = (strength: number): string => {
@@ -296,11 +296,7 @@ const Signup: React.FC = () => {
                       </div>
                       <div className="w-full bg-white/20 rounded-full h-2">
                         <div 
-                          className={`h-2 rounded-full transition-all duration-300 ${
-                            passwordStrength <= 2 ? 'bg-red-400' : 
-                            passwordStrength <= 3 ? 'bg-yellow-400' : 
-                            passwordStrength <= 4 ? 'bg-blue-400' : 'bg-green-400'
-                          }`}
+                          className={`h-2 rounded-full transition-all duration-300 ${getPasswordStrengthColor(passwordStrength)}`}
                           style={{ width: `${(passwordStrength / 5) * 100}%` }}
                         ></div>
                       </div>

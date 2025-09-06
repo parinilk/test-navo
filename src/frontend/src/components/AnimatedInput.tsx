@@ -10,15 +10,13 @@ interface AnimatedInputProps extends React.InputHTMLAttributes<HTMLInputElement>
 
 const AnimatedInput = forwardRef<HTMLInputElement, AnimatedInputProps>(
   ({ label, error, icon, rightIcon, onRightIconClick, className = "", ...props }, ref) => {
-    const [isFocused, setIsFocused] = useState(false);
-    const [hasValue, setHasValue] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
 
-    const handleFocus = () => setIsFocused(true);
-    const handleBlur = () => setIsFocused(false);
-    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      setHasValue(e.target.value.length > 0);
-      if (props.onChange) props.onChange(e);
-    };
+  const handleFocus = () => setIsFocused(true);
+  const handleBlur = () => setIsFocused(false);
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (props.onChange) props.onChange(e);
+  };
 
     return (
       <div className="space-y-2">
