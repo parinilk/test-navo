@@ -303,6 +303,3 @@ class DashboardApiService {
 // Export the service instance
 export const dashboardApi = new DashboardApiService();
 export default dashboardApi;
-
-// Re-export types for easier importing
-export type { DashboardData, ResearchSessionSummary, DashboardStats };
