@@ -1,36 +1,11 @@
 
 
 
-import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { sessionManager } from "../utils/sessionManager";
-
-interface ResearchContext {
-  role: string;
-  objective: string;
-  topic: string;
-}
 
 const Reportcard1 = () => {
   const navigate = useNavigate();
-  const [context, setContext] = useState<ResearchContext>({
-    role: "",
-    objective: "",
-    topic: ""
-  });
 
-  const handleSubmit = () => {
-    // Save context to localStorage and session manager
-    localStorage.setItem('researchContext', JSON.stringify(context));
-    sessionManager.saveContext(context);
-    
-    console.log('✅ Context saved:', context);
-    
-    // Navigate to research query page
-    navigate('/researchcard2');
-  };
-
-  const isFormValid = context.role.trim() && context.objective.trim() && context.topic.trim();
 
   return (
     <div className="flex-1 w-[1210px] h-[963px] bg-[#F7F8FC]">
@@ -54,15 +29,12 @@ const Reportcard1 = () => {
         </div>
 
         {/* Role */}
-        <div className="p-2">
-          <div className="pl-20 font-semibold">Your Role</div>
+        <div className="p-2 pt-[30px]">
           <div className="pl-20 text-medium">I am researching as</div>
           <div className="pl-20 mt-2">
             <input
               type="text"
               placeholder="Select your role"
-              value={context.role}
-              onChange={(e) => setContext(prev => ({ ...prev, role: e.target.value }))}
               className="border border-gray-300 text-gray-500 rounded-lg p-2 w-[570px]  text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
@@ -70,27 +42,21 @@ const Reportcard1 = () => {
 
         {/* Objective */}
         <div className="p-2">
-          <div className="pl-20 font-semibold">Objective</div>
           <div className="pl-20 test-base">What do you want to get out of this research?</div>
           <div className="pl-20 mt-1">
             <textarea
               placeholder="This research aims to..."
-              value={context.objective}
-              onChange={(e) => setContext(prev => ({ ...prev, objective: e.target.value }))}
               className="border border-gray-300 text-gray-500 rounded-lg p-2 h-[55px] w-[570px] text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
         </div>
 
         {/* Topic */}
-        <div className="p-3">
-          <div className="pl-20 font-semibold">Topic</div>
+        <div className="p-2">
           <div className="pl-20 text-base">What is your research about?</div>
           <div className="pl-20 mt-1">
             <textarea
               placeholder="I'm researching...."
-              value={context.topic}
-              onChange={(e) => setContext(prev => ({ ...prev, topic: e.target.value }))}
               className="border border-gray-300 text-gray-500 rounded-lg p-2 w-[570px] h-[55px] text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
@@ -99,13 +65,8 @@ const Reportcard1 = () => {
 
         <div className="flex justify-end pr-14 pt-4">
           <button
-            onClick={handleSubmit}
-            disabled={!isFormValid}
-            className={`px-6 py-2 rounded text-white font-medium ${
-              isFormValid 
-                ? 'bg-blue-500 hover:bg-blue-600 cursor-pointer' 
-                : 'bg-gray-300 cursor-not-allowed'
-            }`}
+            onClick={() => navigate("/researchcard2")}
+            className="bg-blue-700 text-white px-3 py-1 rounded"
           >
             Next
           </button>
