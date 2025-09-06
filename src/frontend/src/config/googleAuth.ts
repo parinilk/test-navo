@@ -11,6 +11,13 @@ export const GOOGLE_SCOPES = [
 // Initialize Google OAuth
 export const initializeGoogleAuth = (): Promise<void> => {
   return new Promise((resolve, reject) => {
+    // Check if Google Client ID is properly configured
+    if (!GOOGLE_CLIENT_ID || GOOGLE_CLIENT_ID === 'your-google-client-id') {
+      console.warn('Google Client ID not configured. Please set VITE_GOOGLE_CLIENT_ID in your .env.local file');
+      reject(new Error('Google Client ID not configured'));
+      return;
+    }
+
     const script = document.createElement('script');
     script.src = 'https://accounts.google.com/gsi/client';
     script.async = true;
@@ -18,13 +25,19 @@ export const initializeGoogleAuth = (): Promise<void> => {
     
     script.onload = () => {
       if (window.google) {
-        window.google.accounts.id.initialize({
-          client_id: GOOGLE_CLIENT_ID,
-          callback: () => {}, // Will be set by components
-          auto_select: false,
-          cancel_on_tap_outside: true,
-        });
-        resolve();
+        try {
+          window.google.accounts.id.initialize({
+            client_id: GOOGLE_CLIENT_ID,
+            callback: () => {}, // Will be set by components
+            auto_select: false,
+            cancel_on_tap_outside: true,
+          });
+          console.log('Google OAuth initialized successfully');
+          resolve();
+        } catch (error) {
+          console.error('Error initializing Google OAuth:', error);
+          reject(error);
+        }
       } else {
         reject(new Error('Google Identity Services failed to load'));
       }
