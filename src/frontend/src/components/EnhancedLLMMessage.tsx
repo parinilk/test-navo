@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import FormattedLLMText from './FormattedLLMText';
 
 interface WebSearchResult {
   title: string;
@@ -17,8 +18,6 @@ interface ResearchResult {
   timestamp: string;
   retrieved_products?: any[];
   web_search_results?: WebSearchResult[];
-  confidence_score?: number;
-  data_gaps?: string[];
   analysis_complexity?: string;
   regulatory_analysis?: any;
 }
@@ -44,7 +43,13 @@ const EnhancedLLMMessage: React.FC<EnhancedLLMMessageProps> = ({ message, resear
         }`}>
           {message.sender}:
         </div>
-        <div className="text-gray-800">{message.text}</div>
+        <div className="text-gray-800">
+          {message.sender === "LLM" ? (
+            <FormattedLLMText text={message.text} />
+          ) : (
+            message.text
+          )}
+        </div>
       </div>
     );
   }
@@ -54,8 +59,8 @@ const EnhancedLLMMessage: React.FC<EnhancedLLMMessageProps> = ({ message, resear
       <div className="font-semibold text-gray-700 mb-2">LLM:</div>
       
       {/* Main Answer */}
-      <div className="text-gray-800 mb-4">
-        {message.text}
+      <div className="mb-4">
+        <FormattedLLMText text={message.text} />
       </div>
       
       {/* Toggle Details Button */}
@@ -137,39 +142,6 @@ const EnhancedLLMMessage: React.FC<EnhancedLLMMessageProps> = ({ message, resear
             </div>
           )}
           
-          {/* Confidence Score & Data Gaps */}
-          <div className="flex gap-4">
-            {researchResult.confidence_score !== undefined && (
-              <div>
-                <h4 className="font-semibold text-gray-700 mb-2">Confidence Score:</h4>
-                <div className="flex items-center">
-                  <div className="w-20 bg-gray-200 rounded-full h-2 mr-2">
-                    <div 
-                      className="bg-blue-600 h-2 rounded-full" 
-                      style={{ width: `${researchResult.confidence_score * 100}%` }}
-                    ></div>
-                  </div>
-                  <span className="text-sm text-gray-600">
-                    {Math.round(researchResult.confidence_score * 100)}%
-                  </span>
-                </div>
-              </div>
-            )}
-            
-            {researchResult.data_gaps && researchResult.data_gaps.length > 0 && (
-              <div>
-                <h4 className="font-semibold text-gray-700 mb-2">Data Gaps:</h4>
-                <ul className="text-gray-600 text-sm space-y-1">
-                  {researchResult.data_gaps.map((gap, idx) => (
-                    <li key={idx} className="flex items-center">
-                      <span className="text-yellow-500 mr-2">⚠️</span>
-                      {gap}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
           
           {/* Analysis Complexity */}
           {researchResult.analysis_complexity && (

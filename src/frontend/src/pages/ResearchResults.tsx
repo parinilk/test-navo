@@ -21,9 +21,6 @@ interface ResearchResponse {
   timestamp: string;
   retrieved_products?: any[];
   web_search_results?: WebSearchResult[];
-  // Enhanced fields for System Prompt compliance
-  confidence_score?: number;
-  data_gaps?: string[];
   analysis_complexity?: string;
   regulatory_analysis?: any;
 }
@@ -95,7 +92,7 @@ const ResearchResults: React.FC = () => {
             {/* Main Answer */}
             <div className="bg-white rounded-lg shadow-sm border p-6 mb-6">
               <h2 className="text-xl font-semibold text-gray-900 mb-4">Answer</h2>
-              <div className="prose max-w-none">
+              <div className="prose max-w-none max-h-96 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100 hover:scrollbar-thumb-gray-400 pr-2">
                 <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">{result.answer}</p>
               </div>
             </div>
@@ -103,7 +100,7 @@ const ResearchResults: React.FC = () => {
             {/* Rationale */}
             <div className="bg-white rounded-lg shadow-sm border p-6 mb-6">
               <h2 className="text-xl font-semibold text-gray-900 mb-4">Rationale</h2>
-              <div className="prose max-w-none">
+              <div className="prose max-w-none max-h-96 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100 hover:scrollbar-thumb-gray-400 pr-2">
                 <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">{result.rationale}</p>
               </div>
             </div>
@@ -212,38 +209,11 @@ const ResearchResults: React.FC = () => {
             )}
 
             {/* Enhanced Analysis Section */}
-            {(result.confidence_score !== undefined || result.data_gaps || result.analysis_complexity || result.regulatory_analysis) && (
+            {(result.analysis_complexity || result.regulatory_analysis) && (
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-6 mb-6">
                 <h2 className="text-lg font-semibold text-blue-800 mb-4">📊 Analysis Assessment</h2>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Confidence Score */}
-                  {result.confidence_score !== undefined && (
-                    <div className="bg-white rounded-lg p-4">
-                      <h3 className="font-medium text-gray-900 mb-2">Confidence Score</h3>
-                      <div className="flex items-center space-x-3">
-                        <div className="flex-1 bg-gray-200 rounded-full h-2">
-                          <div 
-                            className={`h-2 rounded-full ${
-                              result.confidence_score >= 0.8 ? 'bg-green-500' :
-                              result.confidence_score >= 0.6 ? 'bg-yellow-500' :
-                              result.confidence_score >= 0.4 ? 'bg-orange-500' : 'bg-red-500'
-                            }`}
-                            style={{ width: `${(result.confidence_score * 100)}%` }}
-                          ></div>
-                        </div>
-                        <span className="text-sm font-medium text-gray-700">
-                          {(result.confidence_score * 100).toFixed(0)}%
-                        </span>
-                      </div>
-                      <div className="mt-1 text-xs text-gray-500">
-                        {result.confidence_score >= 0.8 ? 'High Confidence' :
-                         result.confidence_score >= 0.6 ? 'Medium Confidence' :
-                         result.confidence_score >= 0.4 ? 'Low Confidence' : 'Very Low Confidence'}
-                      </div>
-                    </div>
-                  )}
-
                   {/* Analysis Complexity */}
                   {result.analysis_complexity && (
                     <div className="bg-white rounded-lg p-4">
@@ -265,24 +235,6 @@ const ResearchResults: React.FC = () => {
                     </div>
                   )}
                 </div>
-
-                {/* Data Gaps */}
-                {result.data_gaps && result.data_gaps.length > 0 && (
-                  <div className="mt-4 bg-white rounded-lg p-4">
-                    <h3 className="font-medium text-gray-900 mb-3">🔍 Identified Data Gaps</h3>
-                    <ul className="space-y-2">
-                      {result.data_gaps.map((gap, index) => (
-                        <li key={index} className="flex items-start text-sm text-gray-700">
-                          <span className="w-2 h-2 bg-orange-400 rounded-full mr-3 mt-2 flex-shrink-0"></span>
-                          <span>{gap}</span>
-                        </li>
-                      ))}
-                    </ul>
-                    <div className="mt-3 text-xs text-gray-500 italic">
-                      💡 These gaps may affect analysis completeness. Consider obtaining additional data for more comprehensive insights.
-                    </div>
-                  </div>
-                )}
 
                 {/* Regulatory Analysis */}
                 {result.regulatory_analysis && (

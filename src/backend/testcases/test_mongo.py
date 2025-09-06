@@ -26,9 +26,9 @@ async def test_mongo_connection():
         print(f"📊 Connected to database: {db.name}")
         
         # Test collection access
-        collection = db['main_data']
+        collection = db['merged_data']
         count = await collection.count_documents({})
-        print(f"📈 Found {count} documents in main_data collection")
+        print(f"📈 Found {count} documents in merged_data collection")
         
         # Test a sample query
         if count > 0:

@@ -77,9 +77,6 @@ class ResearchResponse(BaseModel):
     timestamp: datetime
     retrieved_products: Optional[List[Dict[str, Any]]] = None
     web_search_results: Optional[List[WebSearchResult]] = None
-    # Enhanced fields for System Prompt compliance
-    confidence_score: Optional[float] = None
-    data_gaps: Optional[List[str]] = None
     analysis_complexity: Optional[str] = None
     regulatory_analysis: Optional[Dict[str, Any]] = None
     response_type: str = "research"
@@ -99,6 +96,21 @@ class FeedbackRequest(BaseModel):
     rating: int = Field(..., ge=1, le=5, description="Rating from 1-5")
     feedback_type: str = Field(..., description="Type of feedback: helpful, not_helpful, inaccurate")
     comments: Optional[str] = None
+
+class ReportGenerationRequest(BaseModel):
+    pinned_results: List[str] = Field(..., description="List of pinned information items")
+    research_context: Dict[str, Any] = Field(..., description="Original research context (query, session_id, etc.)")
+    retrieved_products: Optional[List[Dict[str, Any]]] = Field(None, description="Products from research results")
+    web_search_results: Optional[List[WebSearchResult]] = Field(None, description="Web search results from research")
+    report_title: Optional[str] = Field(None, description="Custom title for the report")
+    session_questions: Optional[List[Dict[str, Any]]] = Field(None, description="Results from all question tabs in the session")
+
+class ReportResponse(BaseModel):
+    title: str
+    content: str
+    structured_data: Dict[str, Any]
+    generated_at: datetime
+    session_id: str
 
 # Global services (will be initialized in main.py)
 query_processor = None
@@ -127,10 +139,25 @@ async def submit_research_query(
         
         logger.info(f"Processing research query: {request.query[:100]}...")
         
+        # Step 0: Retrieve session context for follow-up questions
+        session_context = await get_session_context_for_query(session_id, request.query)
+        if session_context:
+            logger.info(f"📚 Retrieved session context: {list(session_context.keys())}")
+            # Merge session context with request context (request context takes precedence)
+            enhanced_context = {**session_context, **(request.context or {})}
+        else:
+            enhanced_context = request.context or {}
+            logger.info("📚 No previous session context found, using request context only")
+        
+        # Build conversation history for LLM context retention
+        conversation_history = await build_conversation_history(session_id)
+        if conversation_history:
+            logger.info(f"📚 Built conversation history with {len(conversation_history)} entries")
+        
         # Step 1: Check if query needs clarification
         logger.info("🤔 Checking if query needs clarification...")
         from utils.query_clarification import analyze_query_clarity
-        clarification_result = analyze_query_clarity(request.query, request.context)
+        clarification_result = analyze_query_clarity(request.query, enhanced_context)
         
         # If clarification is needed, return clarification response
         if clarification_result.needs_clarification:
@@ -160,13 +187,13 @@ async def submit_research_query(
         # Step 2: Enhanced query processing with System Prompt compliance
         logger.info("🔍 Starting query processing...")
         query_processor = QueryProcessor()
-        processed_query = query_processor.process_query(request.query, request.context)
+        processed_query = query_processor.process_query(request.query, enhanced_context)
         logger.info(f"✅ Query processed: {type(processed_query)}")
         
         # Step 3: Classify the query to determine strategy
         logger.info("🔍 Starting query classification...")
         from utils.query_classifier import classify_research_query
-        classification = classify_research_query(request.query, request.context)
+        classification = classify_research_query(request.query, enhanced_context)
         logger.info(f"✅ Query classified: {type(classification)}")
         
         # Merge enhanced analysis with classification
@@ -185,17 +212,51 @@ async def submit_research_query(
         if strategy == 'product_search':
             # Vector search focused approach
             logger.info("📊 Starting product search handler...")
-            response = await _handle_product_search(request, session_id, classification)
+            response = await _handle_product_search(request, session_id, classification, conversation_history)
         elif strategy == 'general_knowledge':
             # LLM knowledge focused approach  
             logger.info("🧠 Starting general knowledge handler...")
-            response = await _handle_general_knowledge(request, session_id, classification)
+            response = await _handle_general_knowledge(request, session_id, classification, conversation_history)
         else:  # hybrid
             # Combined approach
             logger.info("🔀 Starting hybrid research handler...")
-            response = await _handle_hybrid_research(request, session_id, classification)
+            response = await _handle_hybrid_research(request, session_id, classification, conversation_history)
         
         logger.info(f"✅ Handler completed, response type: {type(response)}")
+        
+        # Step 5: Save session context to MongoDB with fallback to local storage
+        try:
+            from models.database import save_session_context_mongo
+            
+            # Generate session title from the first query
+            session_title = request.query[:50] + ("..." if len(request.query) > 50 else "")
+            
+            # Try MongoDB first (automatically creates session as draft)
+            mongo_success = await save_session_context_mongo(
+                session_id, 
+                request.query, 
+                response.dict(), 
+                request.context,
+                session_title=session_title,
+                user_id=None  # TODO: Get from auth context when user auth is implemented
+            )
+            
+            if mongo_success:
+                logger.info(f"✅ Session context saved to MongoDB for session {session_id} (draft)")
+            else:
+                # Fallback to local storage when MongoDB unavailable
+                await save_research_session_fallback(session_id, request.query, response.dict(), request.context)
+                logger.info(f"✅ Session context saved to local storage (fallback) for session {session_id}")
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to save session context to MongoDB, trying fallback: {e}")
+            try:
+                # Fallback to local storage
+                await save_research_session_fallback(session_id, request.query, response.dict(), request.context)
+                logger.info(f"✅ Session context saved to local storage (fallback) for session {session_id}")
+            except Exception as fallback_e:
+                logger.error(f"❌ Failed to save session context to both MongoDB and local storage: {fallback_e}")
+                # Continue without failing the request
         
         logger.info(f"✅ Successfully processed research query for session {session_id}")
         return response
@@ -216,16 +277,31 @@ async def submit_clarified_query(
         logger.info(f"Processing clarified research query: {request.query[:100]}...")
         logger.info("⏭️ Skipping clarification check for clarified query...")
         
+        # Retrieve session context for follow-up questions
+        session_context = await get_session_context_for_query(session_id, request.query)
+        if session_context:
+            logger.info(f"📚 Retrieved session context: {list(session_context.keys())}")
+            # Merge session context with request context (request context takes precedence)
+            enhanced_context = {**session_context, **(request.context or {})}
+        else:
+            enhanced_context = request.context or {}
+            logger.info("📚 No previous session context found, using request context only")
+        
+        # Build conversation history for LLM context retention
+        conversation_history = await build_conversation_history(session_id)
+        if conversation_history:
+            logger.info(f"📚 Built conversation history with {len(conversation_history)} entries")
+        
         # Enhanced query processing with System Prompt compliance
         logger.info("🔍 Starting query processing...")
         query_processor = QueryProcessor()
-        processed_query = query_processor.process_query(request.query, request.context)
+        processed_query = query_processor.process_query(request.query, enhanced_context)
         logger.info(f"✅ Query processed: {type(processed_query)}")
         
         # Classify the query to determine strategy
         logger.info("🔍 Starting query classification...")
         from utils.query_classifier import classify_research_query
-        classification = classify_research_query(request.query, request.context)
+        classification = classify_research_query(request.query, enhanced_context)
         logger.info(f"✅ Query classified: {type(classification)}")
         
         # Merge enhanced analysis with classification
@@ -244,17 +320,52 @@ async def submit_clarified_query(
         if strategy == 'product_search':
             # Vector search focused approach
             logger.info("📊 Starting product search handler...")
-            response = await _handle_product_search(request, session_id, classification)
+            response = await _handle_product_search(request, session_id, classification, conversation_history)
         elif strategy == 'general_knowledge':
             # LLM knowledge focused approach  
             logger.info("🧠 Starting general knowledge handler...")
-            response = await _handle_general_knowledge(request, session_id, classification)
+            response = await _handle_general_knowledge(request, session_id, classification, conversation_history)
         else:  # hybrid
             # Combined approach
             logger.info("🔀 Starting hybrid research handler...")
-            response = await _handle_hybrid_research(request, session_id, classification)
+            response = await _handle_hybrid_research(request, session_id, classification, conversation_history)
         
         logger.info(f"✅ Handler completed, response type: {type(response)}")
+        
+        # Save session context to MongoDB with fallback to local storage
+        try:
+            from models.database import save_session_context_mongo
+            
+            # Generate session title from the first query
+            session_title = request.query[:50] + ("..." if len(request.query) > 50 else "")
+            
+            # Try MongoDB first (automatically creates session as draft)
+            mongo_success = await save_session_context_mongo(
+                session_id, 
+                request.query, 
+                response.dict(), 
+                request.context,
+                session_title=session_title,
+                user_id=None  # TODO: Get from auth context when user auth is implemented
+            )
+            
+            if mongo_success:
+                logger.info(f"✅ Session context saved to MongoDB for session {session_id} (draft)")
+            else:
+                # Fallback to local storage when MongoDB unavailable
+                await save_research_session_fallback(session_id, request.query, response.dict(), request.context)
+                logger.info(f"✅ Session context saved to local storage (fallback) for session {session_id}")
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to save session context to MongoDB, trying fallback: {e}")
+            try:
+                # Fallback to local storage
+                await save_research_session_fallback(session_id, request.query, response.dict(), request.context)
+                logger.info(f"✅ Session context saved to local storage (fallback) for session {session_id}")
+            except Exception as fallback_e:
+                logger.error(f"❌ Failed to save session context to both MongoDB and local storage: {fallback_e}")
+                # Continue without failing the request
+        
         logger.info(f"✅ Successfully processed clarified research query for session {session_id}")
         return response
         
@@ -334,6 +445,30 @@ async def submit_enhanced_research_query(
                 "retrieval_strategy": processing_result.get("retrieval_strategy", {})
             }
         
+        # Save session context to MongoDB with fallback to local storage
+        try:
+            from models.database import save_session_context_mongo
+            
+            # Try MongoDB first
+            mongo_success = await save_session_context_mongo(session_id, request.query, response.dict(), request.context)
+            
+            if mongo_success:
+                logger.info(f"✅ Session context saved to MongoDB for session {session_id}")
+            else:
+                # Fallback to local storage when MongoDB unavailable
+                await save_research_session_fallback(session_id, request.query, response.dict(), request.context)
+                logger.info(f"✅ Session context saved to local storage (fallback) for session {session_id}")
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to save session context to MongoDB, trying fallback: {e}")
+            try:
+                # Fallback to local storage
+                await save_research_session_fallback(session_id, request.query, response.dict(), request.context)
+                logger.info(f"✅ Session context saved to local storage (fallback) for session {session_id}")
+            except Exception as fallback_e:
+                logger.error(f"❌ Failed to save session context to both MongoDB and local storage: {fallback_e}")
+                # Continue without failing the request
+        
         logger.info(f"✅ Enhanced research query completed for session {session_id}")
         return response
         
@@ -393,13 +528,7 @@ Provide comprehensive analysis focusing on the extracted filters and user intent
             sources_used=llm_response.get('sources', []),
             session_id=session_id,
             timestamp=datetime.utcnow(),
-            retrieved_products=products,
-            confidence_score=processing_result.get("quality_assessment", {}).get("overall_score", 0.8),
-            enhanced_metadata={
-                "filters_applied": extracted_filters,
-                "processing_pipeline": "enhanced_product_search",
-                "dataset_routing": processing_result.get("intent_routing", {})
-            }
+            retrieved_products=products
         )
         
     except Exception as e:
@@ -459,13 +588,7 @@ This query requires regulatory expertise. Provide accurate compliance informatio
             sources_used=llm_response.get('sources', []),
             disclaimer="⚠️ Regulatory Disclaimer: This information is for research purposes only. Always consult qualified regulatory professionals for compliance decisions.",
             session_id=session_id,
-            timestamp=datetime.utcnow(),
-            confidence_score=processing_result.get("quality_assessment", {}).get("overall_score", 0.7),
-            enhanced_metadata={
-                "regulatory_focus": True,
-                "jurisdiction": extracted_filters.get('jurisdiction'),
-                "processing_pipeline": "enhanced_regulatory_search"
-            }
+            timestamp=datetime.utcnow()
         )
         
     except Exception as e:
@@ -508,14 +631,7 @@ Based on both product data and regulatory compliance information, here's a compr
             disclaimer=regulatory_response.disclaimer,
             session_id=session_id,
             timestamp=datetime.utcnow(),
-            retrieved_products=product_response.retrieved_products,
-            confidence_score=(product_response.confidence_score + regulatory_response.confidence_score) / 2,
-            enhanced_metadata={
-                "hybrid_search": True,
-                "product_confidence": product_response.confidence_score,
-                "regulatory_confidence": regulatory_response.confidence_score,
-                "processing_pipeline": "enhanced_hybrid_search"
-            }
+            retrieved_products=product_response.retrieved_products
         )
         
     except Exception as e:
@@ -574,14 +690,7 @@ Do not make specific product recommendations - focus on general information and 
             disclaimer="💡 Educational Information: This response is based on general knowledge and web sources. For specific product recommendations or medical advice, consult appropriate professionals.",
             session_id=session_id,
             timestamp=datetime.utcnow(),
-            retrieved_products=[],  # No proprietary products for general knowledge
-            confidence_score=processing_result.get("quality_assessment", {}).get("overall_score", 0.7),
-            enhanced_metadata={
-                "general_knowledge": True,
-                "web_search_results": len(web_results.get('results', [])),
-                "processing_pipeline": "enhanced_general_knowledge",
-                "no_proprietary_data": True
-            }
+            retrieved_products=[]  # No proprietary products for general knowledge
         )
         
     except Exception as e:
@@ -772,7 +881,7 @@ async def _fallback_to_mongodb_search(query: str, db_filters: Dict, dataset_type
         logger.error(f"❌ MongoDB fallback search failed: {e}")
         return []
 
-async def _handle_product_search(request, session_id, classification):
+async def _handle_product_search(request, session_id, classification, conversation_history=None):
     """Handle product-focused research queries with enhanced analysis"""
     logger.info("Executing enhanced product search strategy")
     
@@ -845,7 +954,8 @@ async def _handle_product_search(request, session_id, classification):
                 context=request.context,
                 product_data=products,
                 processed_query=processed_query,
-                web_search_results=web_results
+                web_search_results=web_results,
+                conversation_history=conversation_history
             )
         except Exception as llm_error:
             logger.error(f"LLM service failed: {llm_error}")
@@ -897,9 +1007,6 @@ async def _handle_product_search(request, session_id, classification):
             session_id=session_id,
             timestamp=datetime.utcnow(),
             retrieved_products=products,
-            # Enhanced fields
-            confidence_score=llm_response.get('confidence_score', product_analysis.get('analysis_confidence', 0.0)),
-            data_gaps=llm_response.get('data_gaps', product_analysis.get('data_gaps', [])),
             analysis_complexity=processed_query.get('analysis_complexity', 'medium'),
             regulatory_analysis=regulatory_analysis,
             # NEW: Include web search results when available
@@ -966,8 +1073,6 @@ Provide a helpful response using the available web search information.
                 session_id=session_id,
                 timestamp=datetime.utcnow(),
                 retrieved_products=[],
-                confidence_score=llm_response.get('confidence_score', 0.6),
-                data_gaps=["Product database unavailable"],
                 analysis_complexity="fallback"
             )
             
@@ -981,12 +1086,10 @@ Provide a helpful response using the available web search information.
                 disclaimer="Both product database and web search are currently unavailable. Please try again later.",
                 session_id=session_id,
                 timestamp=datetime.utcnow(),
-                confidence_score=0.0,
-                data_gaps=["System error occurred"],
                 analysis_complexity="error"
             )
 
-async def _handle_general_knowledge(request, session_id, classification):
+async def _handle_general_knowledge(request, session_id, classification, conversation_history=None):
     """Handle general knowledge research queries with web search"""
     query = request.query
     context = request.context or {}
@@ -1025,7 +1128,8 @@ Sources to reference: Scientific research, industry knowledge, regulatory inform
         product_data=[],  # No product data for general knowledge
         vector_results=[],
         processed_query=classification,
-        web_search_results=web_results  # Include web search results
+        web_search_results=web_results,  # Include web search results
+        conversation_history=conversation_history
     )
     
     # Prepare sources used list
@@ -1058,16 +1162,13 @@ Sources to reference: Scientific research, industry knowledge, regulatory inform
         timestamp=datetime.utcnow(),
         retrieved_products=[],
         web_search_results=[WebSearchResult(**result) for result in (web_results[:3] if web_results else [])],
-        # Enhanced fields for System Prompt compliance
-        confidence_score=llm_response.get('confidence_score', 0.8 if web_results else 0.6),
-        data_gaps=llm_response.get('data_gaps', ["No product database integration"] if not web_results else []),
         analysis_complexity=classification.get('processed_query', {}).get('analysis_complexity', 'medium'),
         regulatory_analysis=None
     )
     
     return response
 
-async def _handle_hybrid_research(request, session_id, classification):
+async def _handle_hybrid_research(request, session_id, classification, conversation_history=None):
     """Handle queries requiring both product data, general knowledge, and web search"""
     query = request.query
     context = request.context or {}
@@ -1111,7 +1212,8 @@ Provide a comprehensive response that uses the specific product data, your knowl
         product_data=products,
         vector_results=[],
         processed_query=classification,
-        web_search_results=web_results  # Include web search results
+        web_search_results=web_results,  # Include web search results
+        conversation_history=conversation_history
     )
     
     # Prepare comprehensive sources list
@@ -1142,9 +1244,6 @@ Provide a comprehensive response that uses the specific product data, your knowl
         timestamp=datetime.utcnow(),
         retrieved_products=products,
         web_search_results=[WebSearchResult(**result) for result in (web_results[:3] if web_results else [])],
-        # Enhanced fields for System Prompt compliance
-        confidence_score=llm_response.get('confidence_score', 0.9 if (web_results and products) else 0.7),
-        data_gaps=llm_response.get('data_gaps', []),
         analysis_complexity=classification.get('processed_query', {}).get('analysis_complexity', 'high'),
         regulatory_analysis=None
     )
@@ -1387,19 +1486,29 @@ async def get_research_history(
     session_id: str,
     db=Depends(get_database_dependency)
 ):
-    """Get research history for a session"""
+    """Get research history for a session from local storage (MongoDB commented out for now)"""
     try:
-        if not db:
-            raise HTTPException(status_code=503, detail="Database not available - session history requires MongoDB")
+        # MongoDB temporarily disabled - using local storage only
+        # if db:
+        #     collection = db[COLLECTIONS["research_sessions"]]
+        #     session = await collection.find_one({"session_id": session_id})
+        #     
+        #     if session:
+        #         logger.info(f"✅ Retrieved session {session_id} from MongoDB")
+        #         return ResearchSession(**session)
         
-        collection = db[COLLECTIONS["research_sessions"]]
-        session = await collection.find_one({"session_id": session_id})
+        # Using local storage only for now
+        logger.info(f"🔄 Using local storage for session {session_id}")
+        session = await get_research_history_fallback(session_id)
         
-        if not session:
-            raise HTTPException(status_code=404, detail="Session not found")
+        if session:
+            logger.info(f"✅ Retrieved session {session_id} from local storage")
+            return session
+        else:
+            raise HTTPException(status_code=404, detail="Session not found in local storage")
         
-        return ResearchSession(**session)
-        
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ Error retrieving session history: {e}")
         raise HTTPException(status_code=500, detail="Error retrieving session history")
@@ -1536,7 +1645,7 @@ async def perform_vector_search(vector_store: VectorStore, query: str, top_k: in
         return []
 
 async def save_research_session(db, session_id: str, query: str, response: Dict, context: Optional[Dict]):
-    """Save research query and response to session history"""
+    """Save research query and response to session history in MongoDB"""
     try:
         collection = db[COLLECTIONS["research_sessions"]]
         
@@ -1559,8 +1668,377 @@ async def save_research_session(db, session_id: str, query: str, response: Dict,
             upsert=True
         )
         
-        logger.info(f"✅ Saved query to session {session_id}")
+        logger.info(f"✅ Saved query to MongoDB session {session_id}")
         
     except Exception as e:
-        logger.error(f"❌ Error saving research session: {e}")
+        logger.error(f"❌ Error saving research session to MongoDB: {e}")
         raise
+
+async def save_research_session_fallback(session_id: str, query: str, response: Dict, context: Optional[Dict]):
+    """Save research query and response to local file storage using dictionary-based context storage"""
+    try:
+        import json
+        import os
+        from pathlib import Path
+        
+        # Create local storage directory
+        local_storage_dir = Path("data/sessions")
+        local_storage_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Session file path
+        session_file = local_storage_dir / f"session_{session_id}.json"
+        
+        # Generate unique query ID
+        query_id = str(uuid.uuid4())
+        
+        # Prepare query data (without context in the query object)
+        # Convert any datetime objects in response to ISO format strings
+        def convert_datetime_to_iso(obj):
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            elif isinstance(obj, dict):
+                return {k: convert_datetime_to_iso(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_datetime_to_iso(item) for item in obj]
+            else:
+                return obj
+        
+        query_data = {
+            "query_id": query_id,
+            "query": query,
+            "response": convert_datetime_to_iso(response),
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+        # Load existing session or create new
+        if session_file.exists():
+            try:
+                with open(session_file, 'r', encoding='utf-8') as f:
+                    session_data = json.load(f)
+            except (json.JSONDecodeError, FileNotFoundError):
+                session_data = {
+                    "session_id": session_id,
+                    "queries": [],
+                    "context": {},  # Dictionary to store context as key-value pairs
+                    "created_at": datetime.utcnow().isoformat(),
+                    "updated_at": datetime.utcnow().isoformat()
+                }
+        else:
+            session_data = {
+                "session_id": session_id,
+                "queries": [],
+                "context": {},  # Dictionary to store context as key-value pairs
+                "created_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.utcnow().isoformat()
+            }
+        
+        # Add new query to session
+        session_data["queries"].append(query_data)
+        
+        # Store context as individual key-value pairs for this specific query
+        if context:
+            for key, value in context.items():
+                context_key = f"query_{query_id}_{key}"
+                session_data["context"][context_key] = value
+        
+        session_data["updated_at"] = datetime.utcnow().isoformat()
+        
+        # Save to file
+        with open(session_file, 'w', encoding='utf-8') as f:
+            json.dump(session_data, f, indent=2, ensure_ascii=False)
+        
+        context_keys = [f"query_{query_id}_{key}" for key in (context.keys() if context else [])]
+        logger.info(f"✅ Saved query {query_id} to local storage session {session_id} with context keys: {context_keys}")
+        
+    except Exception as e:
+        logger.error(f"❌ Error saving research session to local storage: {e}")
+        # Don't raise - this is a fallback, we don't want to break the main flow
+
+async def get_research_history_fallback(session_id: str) -> Optional[ResearchSession]:
+    """Get research session history from local file storage with context reconstruction"""
+    try:
+        import json
+        from pathlib import Path
+        
+        # Session file path
+        local_storage_dir = Path("data/sessions")
+        session_file = local_storage_dir / f"session_{session_id}.json"
+        
+        if not session_file.exists():
+            logger.info(f"Session file not found: {session_file}")
+            return None
+        
+        # Load session data with better error handling
+        try:
+            with open(session_file, 'r', encoding='utf-8') as f:
+                session_data = json.load(f)
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            logger.error(f"❌ Error loading session from local storage: {e}")
+            # Try to recover by creating a new session
+            logger.info(f"🔄 Attempting to recover session {session_id}")
+            return None
+        
+        # Convert timestamps back to datetime objects
+        session_data["created_at"] = datetime.fromisoformat(session_data["created_at"])
+        session_data["updated_at"] = datetime.fromisoformat(session_data["updated_at"])
+        
+        # Reconstruct context for each query from the context dictionary
+        context_dict = session_data.get("context", {})
+        for query in session_data["queries"]:
+            query["timestamp"] = datetime.fromisoformat(query["timestamp"])
+            
+            # Reconstruct context for this specific query
+            query_id = query["query_id"]
+            query_context = {}
+            for key, value in context_dict.items():
+                if key.startswith(f"query_{query_id}_"):
+                    context_key = key.replace(f"query_{query_id}_", "")
+                    query_context[context_key] = value
+            
+            # Add reconstructed context to the query
+            query["context"] = query_context if query_context else None
+        
+        # Remove the context dictionary from session data as it's now reconstructed in queries
+        if "context" in session_data:
+            del session_data["context"]
+        
+        logger.info(f"✅ Loaded session {session_id} from local storage with {len(session_data['queries'])} queries")
+        return ResearchSession(**session_data)
+        
+    except Exception as e:
+        logger.error(f"❌ Error loading session from local storage: {e}")
+        return None
+
+async def get_session_context_for_query(session_id: str, current_query: str) -> Optional[Dict[str, Any]]:
+    """Retrieve relevant session context - always return context if available"""
+    try:
+        from models.database import get_session_context_mongo
+        
+        # Try MongoDB first
+        primary_context = await get_session_context_mongo(session_id)
+        
+        if primary_context:
+            logger.info(f"📚 Using context from MongoDB for intelligent context retention")
+            logger.info(f"   Context keys: {list(primary_context.keys())}")
+            return primary_context
+        
+        # Fallback to local storage if MongoDB fails or returns None
+        logger.info(f"📚 MongoDB context not available, trying local storage fallback")
+        session = await get_research_history_fallback(session_id)
+        if not session or not session.queries:
+            return None
+        
+        # Get the most recent query's context as the primary context
+        most_recent_query = session.queries[-1]
+        fallback_context = most_recent_query.get('context', {})
+        
+        if fallback_context:
+            logger.info(f"📚 Using context from local storage fallback for intelligent context retention")
+            logger.info(f"   Previous query: {most_recent_query['query'][:50]}...")
+            logger.info(f"   Context keys: {list(fallback_context.keys())}")
+            return fallback_context
+        else:
+            logger.info(f"📚 No previous context available in either MongoDB or local storage")
+            return None
+        
+    except Exception as e:
+        logger.error(f"❌ Error retrieving session context: {e}")
+        return None
+
+async def build_conversation_history(session_id: str) -> List[Dict[str, Any]]:
+    """Build conversation history from session data for LLM context"""
+    try:
+        from models.database import build_conversation_history_mongo
+        
+        # Try MongoDB first
+        conversation_history = await build_conversation_history_mongo(session_id)
+        
+        if conversation_history:
+            # Limit to last 5 queries to avoid token limits
+            limited_history = conversation_history[-5:] if len(conversation_history) > 5 else conversation_history
+            logger.info(f"📚 Built conversation history from MongoDB with {len(limited_history)} entries")
+            return limited_history
+        
+        # Fallback to local storage
+        logger.info(f"📚 MongoDB conversation history not available, trying local storage fallback")
+        session = await get_research_history_fallback(session_id)
+        if not session or not session.queries:
+            return []
+        
+        fallback_history = []
+        for query_data in session.queries[-5:]:  # Keep last 5 queries to avoid token limits
+            conversation_entry = {
+                "query": query_data.get('query', ''),
+                "response": query_data.get('response', {}).get('answer', ''),
+                "context": query_data.get('context', {}),
+                "timestamp": query_data.get('timestamp', '')
+            }
+            fallback_history.append(conversation_entry)
+        
+        logger.info(f"📚 Built conversation history from local storage fallback with {len(fallback_history)} entries")
+        return fallback_history
+        
+    except Exception as e:
+        logger.error(f"❌ Error building conversation history: {e}")
+        return []
+
+@router.post("/generate-report", response_model=ReportResponse)
+async def generate_comprehensive_report(
+    request: ReportGenerationRequest
+):
+    """Generate a comprehensive report using LLM with pinned information, products, and web search results"""
+    try:
+        session_id = request.research_context.get('session_id', str(uuid.uuid4()))
+        original_query = request.research_context.get('query', 'Research Report')
+        
+        logger.info(f"🔄 Generating comprehensive report for session {session_id}")
+        logger.info(f"📌 Pinned results: {len(request.pinned_results)} items")
+        logger.info(f"🛍️ Retrieved products: {len(request.retrieved_products or [])}")
+        logger.info(f"🔗 Web search results: {len(request.web_search_results or [])}")
+        logger.info(f"❓ Session questions: {len(request.session_questions or [])} questions")
+        
+        # Initialize LLM service
+        from rag.llm_integration import LLMService
+        llm_service = LLMService()
+        
+        # Prepare comprehensive context for report generation
+        report_context = {
+            "original_query": original_query,
+            "pinned_insights": request.pinned_results,
+            "retrieved_products": request.retrieved_products or [],
+            "web_search_results": [result.dict() if hasattr(result, 'dict') else result for result in (request.web_search_results or [])],
+            "session_questions": request.session_questions or [],
+            "session_context": request.research_context,
+            "report_title": request.report_title or f"Research Report: {original_query}"
+        }
+        
+        # Create enhanced prompt for comprehensive report generation
+        session_questions_summary = ""
+        if request.session_questions:
+            session_questions_summary = f"""
+RESEARCH SESSION OVERVIEW ({len(request.session_questions)} questions analyzed):
+{chr(10).join([f"• Question {q.get('questionNumber', 'N/A')}: {q.get('query', 'No query')[:100]}{'...' if len(q.get('query', '')) > 100 else ''}" for q in request.session_questions])}
+"""
+
+        report_prompt = f"""
+You are generating a comprehensive research report based on a multi-question research session with user-pinned insights and supporting data.
+
+RESEARCH SESSION CONTEXT:
+{session_questions_summary}
+
+REPORT TITLE: {report_context['report_title']}
+
+USER-PINNED KEY INSIGHTS ({len(request.pinned_results)} items):
+{chr(10).join([f"• {insight}" for insight in request.pinned_results])}
+
+SUPPORTING PRODUCT DATA ({len(request.retrieved_products or [])} products across all questions):
+{chr(10).join([f"• {product.get('name', 'Unknown Product')} - {product.get('brand', 'Unknown Brand')} ({product.get('category', 'Unknown Category')})" for product in (request.retrieved_products or [])[:15]])}
+
+WEB SEARCH SOURCES ({len(request.web_search_results or [])} links across all questions):
+{chr(10).join([f"• {result.get('title', 'Unknown Title')} - {result.get('source', 'Unknown Source')}" for result in (request.web_search_results or [])[:10]])}
+
+Please generate a comprehensive, professional research report that:
+1. Synthesizes the pinned insights as the core findings from the multi-question research session
+2. References specific products where relevant to support conclusions
+3. Incorporates web search findings to provide current market context
+4. Provides actionable recommendations based on all available data from the research session
+5. Maintains professional formatting with clear sections
+6. Acknowledges the comprehensive nature of the multi-question research approach
+
+Structure the report with:
+- Executive Summary (highlighting the comprehensive research approach)
+- Research Methodology (mention the multi-question analysis)
+- Key Findings (based on pinned insights from all questions)
+- Product Analysis (from all questions, if applicable)
+- Market Context (from web sources across all questions)
+- Cross-Question Insights (patterns across different research areas)
+- Recommendations (synthesized from all research areas)
+- Conclusion
+
+Make it comprehensive yet concise, professional yet accessible. Emphasize the thoroughness of the multi-question research approach.
+"""
+        
+        # Generate the report using LLM
+        llm_response = await llm_service.generate_research_response(
+            query=f"Generate comprehensive report: {original_query}",
+            context=report_context,
+            product_data=request.retrieved_products or [],
+            vector_results=[],
+            processed_query={"analysis_complexity": "high"},
+            web_search_results=request.web_search_results or [],
+            custom_prompt=report_prompt
+        )
+        
+        # Extract and format the report content
+        report_content = llm_response.get('answer', 'Unable to generate report content')
+        
+        # Create structured data for the report
+        structured_data = {
+            "original_query": original_query,
+            "pinned_insights": request.pinned_results,
+            "session_questions_count": len(request.session_questions or []),
+            "product_count": len(request.retrieved_products or []),
+            "web_sources_count": len(request.web_search_results or []),
+            "session_questions": request.session_questions or [],
+            "products": request.retrieved_products or [],
+            "web_sources": [
+                {
+                    "title": result.get('title') if isinstance(result, dict) else result.title,
+                    "url": result.get('url') if isinstance(result, dict) else result.url,
+                    "source": result.get('source') if isinstance(result, dict) else result.source
+                } 
+                for result in (request.web_search_results or [])
+            ],
+            "generation_metadata": {
+                "llm_complexity": "high",
+                "sources_integrated": len(request.pinned_results) + len(request.retrieved_products or []) + len(request.web_search_results or []) + len(request.session_questions or []),
+                "generated_at": datetime.utcnow().isoformat(),
+                "report_type": "multi_question_comprehensive" if request.session_questions else "single_query"
+            }
+        }
+        
+        logger.info(f"✅ Report generated successfully with {len(report_content)} characters")
+        
+        # Mark session as completed when report is generated
+        try:
+            from models.database import update_research_session_status_mongo, ResearchSessionStatus
+            
+            report_metadata = {
+                "title": request.report_title or f"Research Report: {original_query}",
+                "generated_at": datetime.utcnow().isoformat(),
+                "content_length": len(report_content),
+                "sources_integrated": len(request.pinned_results) + len(request.retrieved_products or []) + len(request.web_search_results or []),
+                "report_type": "multi_question_comprehensive" if request.session_questions else "single_query"
+            }
+            
+            success = await update_research_session_status_mongo(
+                session_id, 
+                ResearchSessionStatus.COMPLETED,
+                report_metadata
+            )
+            
+            if success:
+                logger.info(f"✅ Session {session_id} marked as completed after report generation")
+            else:
+                logger.warning(f"⚠️ Could not mark session {session_id} as completed - may not exist in MongoDB")
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to mark session as completed: {e}")
+            # Don't fail the report generation if status update fails
+        
+        return ReportResponse(
+            title=request.report_title or f"Research Report: {original_query}",
+            content=report_content,
+            structured_data=structured_data,
+            generated_at=datetime.utcnow(),
+            session_id=session_id
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Report generation failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate report: {str(e)}"
+        )
+
+# Removed _is_follow_up_question function - now using intelligent LLM-based context retention

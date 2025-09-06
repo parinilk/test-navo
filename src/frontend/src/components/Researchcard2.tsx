@@ -1,7 +1,10 @@
 
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { config } from "../config/config";
+import { sessionManager } from "../utils/sessionManager";
+import { sessionDataManager } from "../utils/sessionDataManager";
+import { dashboardApi } from "../services/dashboardApi";
 import ClarificationCard from "./ClarificationCard";
 
 interface ResearchContext {
@@ -49,19 +52,83 @@ const Researchcard2 = () => {
   const [error, setError] = useState<string | null>(null);
   const [context, setContext] = useState<ResearchContext | null>(null);
   const [clarificationResponse, setClarificationResponse] = useState<ClarificationResponse | null>(null);
+  const [chatHistory, setChatHistory] = useState<QueryResponse[]>([]);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [isLoadingSession, setIsLoadingSession] = useState(false);
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
-  // Load context from previous step
+  // Load context from previous step or existing session
   useEffect(() => {
-    const savedContext = localStorage.getItem('researchContext');
-    if (savedContext) {
-      try {
-        setContext(JSON.parse(savedContext));
-      } catch (e) {
-        console.error('Failed to parse research context:', e);
+    const sessionIdFromUrl = searchParams.get('session_id');
+    
+    if (sessionIdFromUrl) {
+      // Loading existing session
+      loadExistingSession(sessionIdFromUrl);
+    } else {
+      // New session - load context from previous step
+      const savedContext = localStorage.getItem('researchContext');
+      if (savedContext) {
+        try {
+          const parsedContext = JSON.parse(savedContext);
+          setContext(parsedContext);
+          // Also save to session manager
+          sessionManager.saveContext(parsedContext);
+        } catch (e) {
+          console.error('Failed to parse research context:', e);
+        }
       }
     }
-  }, []);
+  }, [searchParams]);
+
+  // Load existing session from MongoDB
+  const loadExistingSession = async (sessionId: string) => {
+    setIsLoadingSession(true);
+    setError(null);
+    
+    try {
+      console.log('🔄 Loading existing session:', sessionId);
+      
+      // Get session details from API
+      const sessionDetails = await dashboardApi.getSessionDetails(sessionId);
+      
+      console.log('✅ Session loaded:', sessionDetails);
+      
+      // Set session ID
+      setSessionId(sessionId);
+      
+      // Set context from session
+      if (sessionDetails.context) {
+        setContext(sessionDetails.context);
+        sessionManager.saveContext(sessionDetails.context);
+      }
+      
+      // Set chat history from session queries
+      if (sessionDetails.queries && sessionDetails.queries.length > 0) {
+        const history: QueryResponse[] = sessionDetails.queries.map((q: any) => ({
+          query: q.query,
+          answer: q.response?.answer || '',
+          rationale: q.response?.rationale || '',
+          sources_used: q.response?.sources_used || [],
+          disclaimer: q.response?.disclaimer,
+          session_id: sessionId,
+          timestamp: q.timestamp,
+          retrieved_products: q.response?.retrieved_products || [],
+          response_type: 'research'
+        }));
+        setChatHistory(history);
+      }
+      
+      // Initialize session data manager with existing session
+      sessionDataManager.initializeSession(sessionId, sessionDetails.context);
+      
+    } catch (err) {
+      console.error('❌ Failed to load session:', err);
+      setError('Failed to load existing session. Please try again.');
+    } finally {
+      setIsLoadingSession(false);
+    }
+  };
 
   // Handle research query submission
   const handleSubmitQuery = async () => {
@@ -75,6 +142,20 @@ const Researchcard2 = () => {
       const API_BASE_URL = config.apiUrl.replace('/api/v1', '');
       console.log('Submitting query to:', `${API_BASE_URL}/api/v1/research/query`);
       
+      // Get session ID and context from session manager
+      const currentSessionId = sessionId || sessionManager.getSessionId();
+      const sessionContext = sessionManager.getContext() || (context ? {
+        role: context.role,
+        objective: context.objective,
+        topic: context.topic
+      } : undefined);
+      
+      // Initialize session data manager with current session
+      sessionDataManager.initializeSession(currentSessionId, sessionContext);
+      
+      console.log('🔍 Submitting query with session ID:', currentSessionId);
+      console.log('🔍 Context:', sessionContext);
+      
       const response = await fetch(`${API_BASE_URL}/api/v1/research/query`, {
         method: 'POST',
         headers: {
@@ -82,12 +163,8 @@ const Researchcard2 = () => {
         },
         body: JSON.stringify({
           query: query,
-          context: context ? {
-            role: context.role,
-            objective: context.objective,
-            topic: context.topic
-          } : undefined,
-          session_id: localStorage.getItem('research_session_id') || undefined,
+          context: sessionContext,
+          session_id: currentSessionId,
         }),
       });
 
@@ -98,18 +175,24 @@ const Researchcard2 = () => {
 
       const result: QueryResponse = await response.json();
       
+      // Add the query and response to chat history
+      setChatHistory(prev => [...prev, result]);
+      
       // Check if it's a clarification response
       if ('response_type' in result && result.response_type === 'clarification') {
         // Show clarification options
         setClarificationResponse(result as ClarificationResponse);
-        localStorage.setItem('research_session_id', result.session_id);
+        console.log('✅ Clarification response received with session ID:', result.session_id);
       } else {
         // It's a research response, store and navigate
         const researchResult = result as ResearchResponse;
         localStorage.setItem('researchResult', JSON.stringify(researchResult));
-        localStorage.setItem('research_session_id', researchResult.session_id);
+        console.log('✅ Research response received with session ID:', researchResult.session_id);
         navigate("/reportcard");
       }
+      
+      // Clear the input
+      setQuery('');
       
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
@@ -319,6 +402,41 @@ const Researchcard2 = () => {
             <div className="flex items-center space-x-2 text-blue-600">
               <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
               <span className="text-sm">Processing your research query...</span>
+            </div>
+          </div>
+        )}
+
+        {/* Session loading indicator */}
+        {isLoadingSession && (
+          <div className="flex justify-center mt-4">
+            <div className="flex items-center space-x-2 text-blue-600">
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+              <span className="text-sm">Loading your research session...</span>
+            </div>
+          </div>
+        )}
+
+        {/* Chat History */}
+        {chatHistory.length > 0 && (
+          <div className="mt-6 max-w-4xl mx-auto">
+            <div className="bg-white rounded-lg border border-gray-200 p-4">
+              <h3 className="text-lg font-semibold text-gray-800 mb-4">Previous Questions & Answers</h3>
+              <div className="space-y-4 max-h-96 overflow-y-auto">
+                {chatHistory.map((item, index) => (
+                  <div key={index} className="border-b border-gray-100 pb-4 last:border-b-0">
+                    <div className="mb-2">
+                      <span className="text-sm font-medium text-gray-600">Question {index + 1}:</span>
+                      <p className="text-gray-800 mt-1">{item.query}</p>
+                    </div>
+                    {item.response_type === 'research' && 'answer' in item && (
+                      <div className="ml-4">
+                        <span className="text-sm font-medium text-gray-600">Answer:</span>
+                        <p className="text-gray-700 mt-1 text-sm line-clamp-3">{item.answer}</p>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         )}

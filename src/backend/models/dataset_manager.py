@@ -51,13 +51,17 @@ class DatasetManager:
         try:
             collection = self.db[collection_name]
             
-            if collection_name == "main_data":
-                # Product data indexes
+            if collection_name == "merged_data":
+                # Merged product and regulatory data indexes
                 await collection.create_index("product_id")
                 await collection.create_index("brand")
                 await collection.create_index("category")
                 await collection.create_index("price")
                 await collection.create_index([("product_name", "text"), ("description", "text")])
+                # Additional indexes for regulatory data fields in merged collection
+                await collection.create_index("ingredient_name")
+                await collection.create_index("jurisdiction")
+                await collection.create_index("usage_context")
                 
             elif collection_name == "regulatory_compliance":
                 # Regulatory data indexes

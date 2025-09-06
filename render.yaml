@@ -33,3 +33,20 @@ services:
         sync: false  # Set this in Render dashboard
       - key: ALLOWED_ORIGINS
         value: "https://test-navo-jsyb.vercel.app/,http://localhost:3000,http://localhost:5173"  # Update with your actual Vercel URL
+      - key: LOG_LEVEL
+        value: "INFO"
+      - key: JWT_SECRET_KEY
+        sync: false  # Set this in Render dashboard
+      - key: GOOGLE_CLIENT_ID
+        sync: false  # Set this in Render dashboard
+      # Web Search API Keys (optional - for enhanced web search functionality)
+      - key: SERP_API_KEY
+        sync: false  # Optional: Set this in Render dashboard for SERP API
+      - key: BING_SEARCH_API_KEY
+        sync: false  # Optional: Set this in Render dashboard for Bing Search
+      - key: SCRAPER_API_KEY
+        sync: false  # Optional: Set this in Render dashboard for ScraperAPI
+      - key: GOOGLE_API_KEY
+        sync: false  # Optional: Set this in Render dashboard for Google Search
+      - key: GOOGLE_CSE_ID
+        sync: false  # Optional: Set this in Render dashboard for Google Custom Search

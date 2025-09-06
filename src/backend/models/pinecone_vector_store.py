@@ -348,5 +348,112 @@ class PineconeVectorStore:
             logger.error(f"❌ Pinecone upsert failed: {e}")
             return False
 
+    async def delete_vectors(
+        self,
+        vector_ids: List[str],
+        namespace: Optional[str] = None
+    ) -> bool:
+        """
+        Delete vectors from Pinecone by ID
+        
+        Args:
+            vector_ids: List of vector IDs to delete
+            namespace: Pinecone namespace
+            
+        Returns:
+            Success status
+        """
+        if not self.is_ready:
+            logger.warning("⚠️ Pinecone not ready for deletion")
+            return False
+        
+        try:
+            # Delete vectors from Pinecone
+            if namespace:
+                response = self.index.delete(ids=vector_ids, namespace=namespace)
+            else:
+                response = self.index.delete(ids=vector_ids)
+            
+            logger.info(f"✅ Deleted {len(vector_ids)} vectors from Pinecone")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Pinecone deletion failed: {e}")
+            return False
+
+    async def delete_all_vectors(
+        self,
+        namespace: Optional[str] = None,
+        confirm: bool = False
+    ) -> bool:
+        """
+        Delete ALL vectors from Pinecone index (use with caution!)
+        
+        Args:
+            namespace: Pinecone namespace to clear
+            confirm: Must be True to proceed with deletion
+            
+        Returns:
+            Success status
+        """
+        if not confirm:
+            logger.error("❌ Deletion not confirmed. Set confirm=True to proceed.")
+            return False
+            
+        if not self.is_ready:
+            logger.warning("⚠️ Pinecone not ready for deletion")
+            return False
+        
+        try:
+            # Delete all vectors in namespace or entire index
+            if namespace:
+                response = self.index.delete(namespace=namespace, delete_all=True)
+                logger.info(f"✅ Deleted all vectors from namespace: {namespace}")
+            else:
+                response = self.index.delete(delete_all=True)
+                logger.info("✅ Deleted ALL vectors from entire index")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Pinecone bulk deletion failed: {e}")
+            return False
+
+    async def delete_vectors_by_metadata(
+        self,
+        metadata_filter: Dict[str, Any],
+        namespace: Optional[str] = None
+    ) -> bool:
+        """
+        Delete vectors based on metadata filter
+        
+        Args:
+            metadata_filter: Pinecone metadata filter to match vectors for deletion
+            namespace: Pinecone namespace
+            
+        Returns:
+            Success status
+        """
+        if not self.is_ready:
+            logger.warning("⚠️ Pinecone not ready for deletion")
+            return False
+        
+        try:
+            # Convert filter to Pinecone format
+            pinecone_filter = self._convert_to_pinecone_filter(metadata_filter)
+            
+            # Delete vectors matching the filter
+            if namespace:
+                response = self.index.delete(filter=pinecone_filter, namespace=namespace)
+            else:
+                response = self.index.delete(filter=pinecone_filter)
+            
+            logger.info(f"✅ Deleted vectors matching filter: {metadata_filter}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Pinecone metadata-based deletion failed: {e}")
+            return False
+
 # Global instance
 pinecone_vector_store = PineconeVectorStore()

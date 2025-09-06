@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import config from "../config/config";
+import { sessionDataManager } from "../utils/sessionDataManager";
+import { conversationStateManager } from "../utils/conversationStateManager";
 import EnhancedLLMMessage from "../components/EnhancedLLMMessage";
 
 interface Message {
@@ -19,28 +21,20 @@ interface ResearchResult {
   timestamp: string;
   retrieved_products?: any[];
   web_search_results?: any[];  // Added: web search results
-  confidence_score?: number;   // Added: confidence score
-  data_gaps?: string[];        // Added: data gaps
   analysis_complexity?: string; // Added: analysis complexity
   regulatory_analysis?: any;    // Added: regulatory analysis
 }
 
 const Question4 = ({ onPin, researchResult }: { onPin: (text: string) => void; researchResult: ResearchResult | null }) => {
-  // Initialize messages based on research result or use defaults
-  const getInitialMessages = (): Message[] => {
+  // Initialize conversation state for Question 4
+  const [messages, setMessages] = useState<Message[]>(() => {
+    // Initialize with research result if available, otherwise get from conversation state
     if (researchResult) {
-      return [
-        { sender: "User", text: researchResult.query },
-        { sender: "LLM", text: researchResult.answer }  // Changed: use answer instead of rationale
-      ];
+      conversationStateManager.initializeQuestion(4, researchResult);
+      return conversationStateManager.getMessages(4);
     }
-    return [
-      { sender: "User", text: "What is the rationale behind this?" },
-      { sender: "LLM", text: "Here's the detailed reasoning..." }
-    ];
-  };
-  
-  const [messages, setMessages] = useState<Message[]>(getInitialMessages());
+    return conversationStateManager.getMessages(4);
+  });
   const [selectedText, setSelectedText] = useState("");
   const [showPin, setShowPin] = useState(false);
   const [pinPosition, setPinPosition] = useState({ x: 0, y: 0 });
@@ -48,20 +42,26 @@ const Question4 = ({ onPin, researchResult }: { onPin: (text: string) => void; r
   const [editIndex, setEditIndex] = useState<number | null>(null);
   const [editText, setEditText] = useState("");
   const [showConfirm, setShowConfirm] = useState(false);
+  const [currentResearchResult, setCurrentResearchResult] = useState<ResearchResult | null>(researchResult);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   // Update messages when researchResult changes
   useEffect(() => {
-    const initialMessages: Message[] = researchResult ? [
-      { sender: "User", text: researchResult.query },
-      { sender: "LLM", text: researchResult.answer }  // Changed: use answer
-    ] : [
-      { sender: "User", text: "What is the rationale behind this?" },
-      { sender: "LLM", text: "Here's the detailed reasoning..." }
-    ];
-    setMessages(initialMessages);
+    if (researchResult) {
+      conversationStateManager.initializeQuestion(4, researchResult);
+      setMessages(conversationStateManager.getMessages(4));
+      setCurrentResearchResult(researchResult);
+    }
   }, [researchResult]);
+
+  // Get the latest research result from session data
+  useEffect(() => {
+    const latestResult = sessionDataManager.getQuestionResult(4);
+    if (latestResult) {
+      setCurrentResearchResult(latestResult);
+    }
+  }, [messages]); // Update when messages change (new queries)
 
   // --- scroll to bottom whenever messages change ---
   useEffect(() => {
@@ -98,12 +98,16 @@ const Question4 = ({ onPin, researchResult }: { onPin: (text: string) => void; r
     if (inputText.trim() === "") return;
     
     const userMessage: Message = { sender: "User", text: inputText.trim() };
-    setMessages((prev) => [...prev, userMessage]);
+    const messagesWithUser = [...messages, userMessage];
+    setMessages(messagesWithUser);
+    conversationStateManager.updateMessages(4, messagesWithUser);
     setInputText("");
     
     // Show loading state
     const loadingMessage: Message = { sender: "LLM", text: "Thinking..." };
-    setMessages((prev) => [...prev, loadingMessage]);
+    const messagesWithLoading = [...messagesWithUser, loadingMessage];
+    setMessages(messagesWithLoading);
+    conversationStateManager.updateMessages(4, messagesWithLoading);
     
     try {
       // Use the research API to get a real response
@@ -129,20 +133,26 @@ const Question4 = ({ onPin, researchResult }: { onPin: (text: string) => void; r
 
       const result = await response.json();
       
+      // Store research result in session data for comprehensive report generation
+      if (result.response_type === 'research') {
+        sessionDataManager.addQuestionResult(4, result);
+        console.log('✅ Stored Question 4 result in session data');
+      }
+      
       // Replace loading message with actual response
-      setMessages((prev) => 
-        prev.slice(0, -1).concat([{ sender: "LLM", text: result.answer }])
-      );
+      const newMessages = messages.slice(0, -1).concat([{ sender: "LLM", text: result.answer }]);
+      setMessages(newMessages);
+      conversationStateManager.updateMessages(4, newMessages);
       
     } catch (error) {
       console.error('Error getting LLM response:', error);
       // Replace loading message with error message
-      setMessages((prev) => 
-        prev.slice(0, -1).concat([{ 
-          sender: "LLM", 
-          text: "Sorry, I couldn't process your question right now. Please try again." 
-        }])
-      );
+      const errorMessages = messages.slice(0, -1).concat([{ 
+        sender: "LLM", 
+        text: "Sorry, I couldn't process your question right now. Please try again." 
+      }]);
+      setMessages(errorMessages);
+      conversationStateManager.updateMessages(4, errorMessages);
     }
   };
 
@@ -155,11 +165,72 @@ const Question4 = ({ onPin, researchResult }: { onPin: (text: string) => void; r
     setShowConfirm(true);
   };
 
-  const confirmSave = () => {
+  const confirmSave = async () => {
     if (editIndex === null) return;
+    
     const updated = [...messages];
     updated[editIndex].text = editText;
-    setMessages(updated);
+    
+    // If we're editing a user message, we need to regenerate subsequent responses
+    if (messages[editIndex].sender === "User") {
+      // Remove all messages after the edited one
+      const messagesUpToEdit = updated.slice(0, editIndex + 1);
+      setMessages(messagesUpToEdit);
+      
+      // Add loading message
+      const loadingMessage: Message = { sender: "LLM", text: "Regenerating response..." };
+      setMessages(prev => [...prev, loadingMessage]);
+      
+      try {
+        // Use the research API to get a new response based on the edited message
+        const API_BASE_URL = config.apiUrl.replace('/api/v1', '');
+        const response = await fetch(`${API_BASE_URL}/api/v1/research/query`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            query: editText.trim(),
+            context: researchResult ? {
+              previous_query: researchResult.query,
+              session_id: researchResult.session_id
+            } : undefined,
+            session_id: researchResult?.session_id || undefined,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to get response');
+        }
+
+        const result = await response.json();
+        
+        // Store updated research result in session data
+        if (result.response_type === 'research') {
+          sessionDataManager.addQuestionResult(4, result);
+          console.log('✅ Updated Question 4 result in session data');
+        }
+        
+        // Replace loading message with actual response
+        setMessages(prev => 
+          prev.slice(0, -1).concat([{ sender: "LLM", text: result.answer }])
+        );
+        
+      } catch (error) {
+        console.error('Error regenerating LLM response:', error);
+        // Replace loading message with error message
+        setMessages(prev => 
+          prev.slice(0, -1).concat([{ 
+            sender: "LLM", 
+            text: "Sorry, I couldn't regenerate the response right now. Please try again." 
+          }])
+        );
+      }
+    } else {
+      // If editing an LLM message, just update the text
+      setMessages(updated);
+    }
+    
     setEditIndex(null);
     setEditText("");
     setShowConfirm(false);
@@ -167,12 +238,12 @@ const Question4 = ({ onPin, researchResult }: { onPin: (text: string) => void; r
   };
 
   return (
-    <div className="relative bg-white p-4 rounded shadow w-[580px] h-[470px] flex flex-col overflow-hidden">
+    <div className="relative bg-white p-4 rounded shadow w-full h-full flex flex-col overflow-hidden">
       {/* Header */}
       <h2 className="text-lg font-semibold mb-2">Conversation for Question 4</h2>
 
       {/* Messages */}
-      <div className="space-y-4 flex-1 overflow-y-auto scrollbar-hide pr-2">
+      <div className="space-y-4 flex-1 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100 hover:scrollbar-thumb-gray-400">
         {messages.map((msg, idx) => (
           <div
             key={idx}
@@ -183,7 +254,7 @@ const Question4 = ({ onPin, researchResult }: { onPin: (text: string) => void; r
             {msg.sender === "LLM" ? (
               <EnhancedLLMMessage
                 message={msg}
-                researchResult={researchResult}
+                researchResult={currentResearchResult}
               />
             ) : (
               <div className="flex flex-col items-end max-w-[70%]">
@@ -300,9 +371,12 @@ const Question4 = ({ onPin, researchResult }: { onPin: (text: string) => void; r
       {showConfirm && (
         <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
           <div className="bg-white p-6 rounded-xl shadow-lg w-80 text-center">
-            <h2 className="text-lg font-semibold mb-4">Confirm Save</h2>
+            <h2 className="text-lg font-semibold mb-4">Confirm Edit</h2>
             <p className="text-gray-600 mb-6">
-              To make these changes, you will lose{" "}
+              {messages[editIndex!]?.sender === "User" 
+                ? "Editing this message will regenerate the AI response. This will cost "
+                : "To make these changes, you will lose "
+              }
               <span className="font-bold text-red-500">10 credits</span>.
             </p>
             <div className="flex justify-around">

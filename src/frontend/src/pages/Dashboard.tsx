@@ -1,6 +1,6 @@
 
 
-import Draftcard from '../components/Draftcard'
+import DynamicDashboard from '../components/DynamicDashboard'
 import Navbar from '../components/Navbar'
 import Sidebar from '../components/Sidebar'
 
@@ -12,7 +12,7 @@ const Dashboard = () => {
       <Navbar />
       <div className="flex">
         <Sidebar />
-        <Draftcard />
+        <DynamicDashboard />
         </div>
       
     </>

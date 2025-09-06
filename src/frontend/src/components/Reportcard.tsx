@@ -3,6 +3,7 @@
 
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { sessionDataManager } from "../utils/sessionDataManager";
 import Question1 from "../Questions/Question1";
 import Question2 from "../Questions/Question2";
 import Question3 from "../Questions/Question3";
@@ -19,8 +20,6 @@ interface ResearchResult {
   timestamp: string;
   retrieved_products?: any[];
   web_search_results?: any[];  // Added: web search results
-  confidence_score?: number;   // Added: confidence score
-  data_gaps?: string[];        // Added: data gaps
   analysis_complexity?: string; // Added: analysis complexity
   regulatory_analysis?: any;    // Added: regulatory analysis
 }
@@ -94,9 +93,9 @@ const Reportcard = () => {
   };
 
   return (
-    <div className="flex w-full h-[500px]">
+    <div className="flex w-full h-screen">
       {/* Left Panel */}
-      <div className="w-1/2 p-4 border-r">
+      <div className="w-1/2 p-4 border-r flex flex-col">
         <div className="flex gap-2 mb-4">
           {[1, 2, 3, 4, 5].map((num) => (
             <button
@@ -110,12 +109,15 @@ const Reportcard = () => {
             </button>
           ))}
         </div>
-        {renderQuestion()}
+        <div className="flex-1">
+          {renderQuestion()}
+        </div>
       </div>
 
       {/* Right Panel */}
-      <div className="w-1/2 h-[540px] p-4 overflow-y-auto scrollbar-hidden bg-white relative">
+      <div className="w-1/2 p-4 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100 hover:scrollbar-thumb-gray-400 bg-white relative flex flex-col">
         <h2 className="font-semibold mb-2 text-center">Pinned Results</h2>
+        <div className="flex-1">
         {pinnedResults.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-2">
             {/* Your existing SVG and empty message here */}
@@ -229,18 +231,38 @@ const Reportcard = () => {
             ))}
           </ul>
         )}
+        </div>
 
         {/* Bottom-right Action Button */}
         <button
           className="absolute bottom-4 right-4 px-4 py-2 bg-blue-600 text-white rounded shadow hover:bg-blue-700"
           onClick={() => {
-            // Store pinned results for report generation
-            localStorage.setItem('pinnedResults', JSON.stringify(pinnedResults));
+            // Update pinned results in session data manager
+            sessionDataManager.updatePinnedInsights(pinnedResults);
+            
+            // Get comprehensive report data from session
+            const reportData = sessionDataManager.getReportData();
+            const stats = sessionDataManager.getSessionStats();
+            
+            console.log('📊 Report Generation Data:');
+            console.log(`   Questions completed: ${stats.questionsCompleted}/5`);
+            console.log(`   Total products: ${stats.totalProducts}`);
+            console.log(`   Total web sources: ${stats.totalWebSources}`);
+            console.log(`   Pinned insights: ${stats.pinnedInsights}`);
+            
+            // Store comprehensive data for report generation (backward compatibility)
+            localStorage.setItem('pinnedResults', JSON.stringify(reportData.pinned_insights));
+            localStorage.setItem('retrievedProducts', JSON.stringify(reportData.all_retrieved_products));
+            localStorage.setItem('webSearchResults', JSON.stringify(reportData.all_web_search_results));
             localStorage.setItem('researchContext', JSON.stringify({
-              query: researchResult?.query || '',
-              timestamp: researchResult?.timestamp || new Date().toISOString(),
-              session_id: researchResult?.session_id || ''
+              query: `Comprehensive Research Report (${stats.questionsCompleted} questions)`,
+              timestamp: new Date().toISOString(),
+              session_id: reportData.session_id
             }));
+            
+            // Store session report data for enhanced report generation
+            localStorage.setItem('sessionReportData', JSON.stringify(reportData));
+            
             // Navigate to main report page
             navigate('/report');
           }}

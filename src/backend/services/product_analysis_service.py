@@ -37,8 +37,6 @@ class ProductAnalysisService:
         
         analysis = {
             "total_products": len(products),
-            "analysis_confidence": 0.0,
-            "data_gaps": [],
             "key_insights": [],
             "comparative_analysis": {},
             "functional_analysis": {},
@@ -57,11 +55,6 @@ class ProductAnalysisService:
             # Comparative analysis
             analysis["comparative_analysis"] = self._compare_products(products)
             
-            # Identify data gaps
-            analysis["data_gaps"] = self._identify_data_gaps(products)
-            
-            # Calculate analysis confidence
-            analysis["analysis_confidence"] = self._calculate_analysis_confidence(products, analysis["data_gaps"])
             
             # Generate evidence-based insights
             analysis["key_insights"] = self._generate_insights(products, analysis)
@@ -268,121 +261,6 @@ class ProductAnalysisService:
         
         return comparison
     
-    def _identify_data_gaps(self, products: List[EnhancedProduct]) -> List[str]:
-        """Identify missing data that limits analysis quality"""
-        gaps = []
-        
-        if not products:
-            gaps.append("No products found in dataset")
-            return gaps
-        
-        # Check for missing ingredient data
-        products_missing_ingredients = []
-        for product in products:
-            if hasattr(product, 'ingredients'):
-                if not product.ingredients:
-                    products_missing_ingredients.append(getattr(product, 'name', 'Unknown'))
-            elif isinstance(product, dict):
-                if not product.get('ingredients'):
-                    products_missing_ingredients.append(product.get('product_name', 'Unknown'))
-        
-        if products_missing_ingredients:
-            gaps.append(f"Ingredient information missing for {len(products_missing_ingredients)} products")
-        
-        # Check for missing pricing data
-        products_missing_pricing = []
-        for product in products:
-            if hasattr(product, 'pricing') and product.pricing and hasattr(product.pricing, 'base_price'):
-                if not product.pricing.base_price:
-                    products_missing_pricing.append(getattr(product, 'name', 'Unknown'))
-            elif isinstance(product, dict):
-                has_price = False
-                if 'price' in product and product['price']:
-                    has_price = True
-                elif 'pricing' in product and isinstance(product['pricing'], dict):
-                    pricing_dict = product['pricing']
-                    if 'base_price' in pricing_dict and pricing_dict['base_price']:
-                        has_price = True
-                    elif 'price' in pricing_dict and pricing_dict['price']:
-                        has_price = True
-                
-                if not has_price:
-                    products_missing_pricing.append(product.get('product_name', 'Unknown'))
-        
-        if products_missing_pricing:
-            gaps.append(f"Pricing information missing for {len(products_missing_pricing)} products")
-        
-        # Check for missing brand information
-        products_missing_brand = []
-        for product in products:
-            if hasattr(product, 'brand'):
-                if not product.brand:
-                    products_missing_brand.append(getattr(product, 'name', 'Unknown'))
-            elif isinstance(product, dict):
-                if not product.get('brand'):
-                    products_missing_brand.append(product.get('product_name', 'Unknown'))
-        
-        if products_missing_brand:
-            gaps.append(f"Brand information missing for {len(products_missing_brand)} products")
-        
-        return gaps
-    
-    def _calculate_analysis_confidence(self, products: List[EnhancedProduct], data_gaps: List[str]) -> float:
-        """Calculate confidence score based on data completeness"""
-        if not products:
-            return 0.0
-        
-        # Base confidence starts at 0.5
-        confidence = 0.5
-        
-        # Add confidence for each product with complete data
-        for product in products:
-            product_confidence = 0.0
-            
-            # Check ingredients
-            if hasattr(product, 'ingredients') and product.ingredients:
-                product_confidence += 0.2
-            elif isinstance(product, dict) and product.get('ingredients'):
-                product_confidence += 0.2
-            
-            # Check pricing
-            if hasattr(product, 'pricing') and product.pricing and hasattr(product.pricing, 'base_price') and product.pricing.base_price:
-                product_confidence += 0.2
-            elif isinstance(product, dict):
-                has_price = False
-                if 'price' in product and product['price']:
-                    has_price = True
-                elif 'pricing' in product and isinstance(product['pricing'], dict):
-                    pricing_dict = product['pricing']
-                    if 'base_price' in pricing_dict and pricing_dict['base_price']:
-                        has_price = True
-                    elif 'price' in pricing_dict and pricing_dict['price']:
-                        has_price = True
-                
-                if has_price:
-                    product_confidence += 0.2
-            
-            # Check brand
-            if hasattr(product, 'brand') and product.brand:
-                product_confidence += 0.1
-            elif isinstance(product, dict) and product.get('brand'):
-                product_confidence += 0.1
-            
-            # Check category
-            if hasattr(product, 'category') and product.category:
-                product_confidence += 0.1
-            elif isinstance(product, dict) and product.get('category'):
-                product_confidence += 0.1
-            
-            # Add to total confidence
-            confidence += product_confidence
-        
-        # Penalize for data gaps
-        gap_penalty = len(data_gaps) * 0.05
-        confidence = max(0.0, confidence - gap_penalty)
-        
-        # Cap at 1.0
-        return min(1.0, confidence)
     
     def _generate_insights(self, products: List[EnhancedProduct], analysis: Dict[str, Any]) -> List[str]:
         """Generate insights based on analysis results"""
@@ -412,31 +290,40 @@ class ProductAnalysisService:
             top_functions = sorted(profile.items(), key=lambda x: len(x[1]), reverse=True)[:3]
             insights.append(f"Top functional benefits: {', '.join([f'{func} ({len(products)} products)' for func, products in top_functions])}")
         
-        # Data quality insights
-        data_gaps = analysis.get("data_gaps", [])
-        if data_gaps:
-            insights.append(f"Data gaps identified: {len(data_gaps)} areas need improvement")
         
-        # Confidence insights
-        confidence = analysis.get("analysis_confidence", 0)
-        if confidence < 0.5:
-            insights.append("Analysis confidence is low due to missing data")
-        elif confidence > 0.8:
-            insights.append("High confidence analysis with comprehensive data")
-        else:
-            insights.append("Moderate confidence analysis with some data limitations")
         
         return insights
     
     def _assess_evidence_quality(self, products: List[EnhancedProduct], analysis: Dict[str, Any]) -> str:
         """Assess quality of evidence for analysis"""
-        confidence = analysis.get("analysis_confidence", 0.0)
+        if not products:
+            return "insufficient"
         
-        if confidence >= 0.8:
+        # Assess based on product data completeness
+        complete_products = 0
+        for product in products:
+            completeness_score = 0
+            if isinstance(product, dict):
+                if product.get('product_name'): completeness_score += 1
+                if product.get('brand'): completeness_score += 1
+                if product.get('price'): completeness_score += 1
+                if product.get('description') or product.get('ingredients'): completeness_score += 1
+            else:
+                if hasattr(product, 'name') and product.name: completeness_score += 1
+                if hasattr(product, 'brand') and product.brand: completeness_score += 1
+                if hasattr(product, 'pricing'): completeness_score += 1
+                if hasattr(product, 'ingredients'): completeness_score += 1
+            
+            if completeness_score >= 3:
+                complete_products += 1
+        
+        completeness_ratio = complete_products / len(products)
+        
+        if completeness_ratio >= 0.8:
             return "high"
-        elif confidence >= 0.6:
+        elif completeness_ratio >= 0.6:
             return "medium"
-        elif confidence >= 0.4:
+        elif completeness_ratio >= 0.4:
             return "low"
         else:
             return "insufficient"
@@ -448,8 +335,6 @@ class ProductAnalysisService:
         if analysis["evidence_quality"] in ["low", "insufficient"]:
             recommendations.append("Analysis confidence is low - additional product data needed for reliable insights")
         
-        if analysis["data_gaps"]:
-            recommendations.append("Consider obtaining missing data for more comprehensive analysis")
         
         if len(products) < 5:
             recommendations.append("Expand product sample size for more robust comparative analysis")
@@ -541,8 +426,6 @@ class ProductAnalysisService:
         """Create analysis when no products found"""
         return {
             "total_products": 0,
-            "analysis_confidence": 0.0,
-            "data_gaps": ["No products found for analysis"],
             "key_insights": ["No product data available for the specified query"],
             "recommendations": [
                 "Expand search criteria to find relevant products",
@@ -556,8 +439,6 @@ class ProductAnalysisService:
         """Create fallback analysis when processing fails"""
         return {
             "total_products": len(products),
-            "analysis_confidence": 0.0,
-            "data_gaps": [f"Analysis failed: {error}"],
             "key_insights": ["Product analysis encountered technical difficulties"],
             "recommendations": [
                 "Technical analysis failed - using basic product information only",

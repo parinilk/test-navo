@@ -21,9 +21,13 @@ const Reportcardmain = () => {
   const [pinnedResults, setPinnedResults] = useState<string[]>([]);
   const [researchContext, setResearchContext] = useState<ResearchContext | null>(null);
   const [researchResult, setResearchResult] = useState<ResearchResult | null>(null);
+  const [retrievedProducts, setRetrievedProducts] = useState<any[]>([]);
+  const [webSearchResults, setWebSearchResults] = useState<any[]>([]);
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [generatedReport, setGeneratedReport] = useState<string | null>(null);
 
   useEffect(() => {
-    // Load pinned results from localStorage
+    // Load pinned results from localStorage (backward compatibility)
     const savedPinnedResults = localStorage.getItem('pinnedResults');
     if (savedPinnedResults) {
       try {
@@ -33,7 +37,7 @@ const Reportcardmain = () => {
       }
     }
 
-    // Load research context
+    // Load research context (backward compatibility)
     const savedContext = localStorage.getItem('researchContext');
     if (savedContext) {
       try {
@@ -43,7 +47,7 @@ const Reportcardmain = () => {
       }
     }
 
-    // Load original research result for additional context
+    // Load original research result for additional context (backward compatibility)
     const savedResult = localStorage.getItem('researchResult');
     if (savedResult) {
       try {
@@ -52,11 +56,73 @@ const Reportcardmain = () => {
         console.error('Failed to parse research result:', e);
       }
     }
+
+    // Load retrieved products (backward compatibility)
+    const savedProducts = localStorage.getItem('retrievedProducts');
+    if (savedProducts) {
+      try {
+        setRetrievedProducts(JSON.parse(savedProducts));
+      } catch (e) {
+        console.error('Failed to parse retrieved products:', e);
+      }
+    }
+
+    // Load web search results (backward compatibility)
+    const savedWebResults = localStorage.getItem('webSearchResults');
+    if (savedWebResults) {
+      try {
+        setWebSearchResults(JSON.parse(savedWebResults));
+      } catch (e) {
+        console.error('Failed to parse web search results:', e);
+      }
+    }
   }, []);
 
+  const generateEnhancedReport = async () => {
+    if (!researchContext || pinnedResults.length === 0) {
+      alert('No pinned results available for report generation');
+      return;
+    }
+
+    setIsGeneratingReport(true);
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/research/generate-report`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          pinned_results: pinnedResults,
+          research_context: researchContext,
+          retrieved_products: retrievedProducts,
+          web_search_results: webSearchResults,
+          report_title: `Research Report: ${researchContext.query}`,
+          // Include comprehensive session data for better analysis
+          session_questions: JSON.parse(localStorage.getItem('sessionReportData') || '{}').all_question_results || []
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const reportData = await response.json();
+      setGeneratedReport(reportData.content);
+      
+      // Also save the structured data for future reference
+      localStorage.setItem('lastGeneratedReport', JSON.stringify(reportData));
+      
+    } catch (error) {
+      console.error('Failed to generate enhanced report:', error);
+      alert('Failed to generate report. Please try again.');
+    } finally {
+      setIsGeneratingReport(false);
+    }
+  };
+
   const exportReport = () => {
-    // Create a comprehensive report text
-    const reportContent = generateReportContent();
+    // Use the generated report content if available, otherwise fallback to old method
+    const reportContent = generatedReport || generateReportContent();
     
     // Create a blob and download
     const blob = new Blob([reportContent], { type: 'text/plain' });
@@ -139,110 +205,183 @@ Report generated on ${new Date().toLocaleString()}
         <span className="mx-3">|</span>
         <span>Session: {researchContext?.session_id?.slice(0, 8) || 'N/A'}</span>
 
-        <button 
-          onClick={exportReport}
-          className="ml-auto flex items-center gap-2 bg-[#005CCE] text-white border border-blue-500 px-3 py-2 rounded text-sm hover:bg-blue-500 hover:text-white transition-colors duration-200"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            className="w-4 h-4"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={2}
+        <div className="ml-auto flex items-center gap-2">
+          <button 
+            onClick={generateEnhancedReport}
+            disabled={isGeneratingReport || pinnedResults.length === 0}
+            className={`flex items-center gap-2 px-3 py-2 rounded text-sm transition-colors duration-200 ${
+              isGeneratingReport || pinnedResults.length === 0
+                ? 'bg-gray-400 text-white cursor-not-allowed'
+                : 'bg-green-600 text-white hover:bg-green-700'
+            }`}
           >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5-5m0 0l5 5m-5-5v12"
-            />
-          </svg>
-          Export Report
-        </button>
+            {isGeneratingReport ? (
+              <>
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                Generating...
+              </>
+            ) : (
+              <>
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="w-4 h-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                  />
+                </svg>
+                Generate Enhanced Report
+              </>
+            )}
+          </button>
+
+          <button 
+            onClick={exportReport}
+            className="flex items-center gap-2 bg-[#005CCE] text-white border border-blue-500 px-3 py-2 rounded text-sm hover:bg-blue-500 hover:text-white transition-colors duration-200"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="w-4 h-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5-5m0 0l5 5m-5-5v12"
+              />
+            </svg>
+            Export Report
+          </button>
+        </div>
       </div>
 
       {/* Card content */}
       <div className="border rounded p-4 w-[1210px] h-[480px] bg-white overflow-y-auto">
-        {/* Executive Summary */}
-        <section className="mb-6">
-          <h2 className="font-semibold text-lg mb-2">Executive Summary</h2>
-          <div className="text-sm text-gray-700 leading-relaxed">
-            {researchResult?.answer ? (
-              <p>{researchResult.answer}</p>
-            ) : (
-              <p className="text-gray-500 italic">No research data available. Please complete a research query first.</p>
+        {generatedReport ? (
+          // Show enhanced LLM-generated report
+          <div className="prose max-w-none">
+            <div className="bg-green-50 border border-green-200 rounded p-3 mb-4">
+              <div className="flex items-center gap-2 text-green-700">
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+                <span className="font-semibold">Enhanced Report Generated</span>
+              </div>
+              <p className="text-sm text-green-600 mt-1">
+                This comprehensive report includes analysis of {pinnedResults.length} pinned insights, {retrievedProducts.length} products, and {webSearchResults.length} web sources from your research session.
+              </p>
+            </div>
+            <div className="whitespace-pre-wrap text-sm text-gray-700 leading-relaxed">
+              {generatedReport}
+            </div>
+          </div>
+        ) : (
+          // Show default report structure
+          <>
+            {/* Status indicator */}
+            <div className="bg-blue-50 border border-blue-200 rounded p-3 mb-4">
+              <div className="flex items-center gap-2 text-blue-700">
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                </svg>
+                <span className="font-semibold">Basic Report View</span>
+              </div>
+              <p className="text-sm text-blue-600 mt-1">
+                Click "Generate Enhanced Report" above to create a comprehensive AI-generated analysis including products and web sources.
+              </p>
+            </div>
+
+            {/* Executive Summary */}
+            <section className="mb-6">
+              <h2 className="font-semibold text-lg mb-2">Executive Summary</h2>
+              <div className="text-sm text-gray-700 leading-relaxed">
+                {researchResult?.answer ? (
+                  <p>{researchResult.answer}</p>
+                ) : (
+                  <p className="text-gray-500 italic">No research data available. Please complete a research query first.</p>
+                )}
+              </div>
+            </section>
+
+            {/* Research Objective */}
+            <section className="mb-6">
+              <h2 className="font-semibold text-lg mb-2">Research Objective</h2>
+              <p className="text-sm font-semibold text-gray-700 mb-2">Original Query:</p>
+              <div className="bg-gray-50 p-3 rounded mb-3">
+                <p className="text-sm text-gray-700 italic">
+                  "{researchContext?.query || 'No query available'}"
+                </p>
+              </div>
+              
+              {pinnedResults.length > 0 && (
+                <>
+                  <p className="text-sm font-semibold text-gray-700 mb-2">Key Insights (from pinned results):</p>
+                  <ul className="list-disc pl-6 text-sm text-gray-700">
+                    {pinnedResults.map((item, index) => (
+                      <li key={index} className="mb-1">
+                        {item.replace(/^Q-\d+: /, '')}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </section>
+
+            {/* Analysis & Findings */}
+            <section className="mb-6">
+              <h2 className="font-semibold text-lg mb-2">Detailed Analysis & Rationale</h2>
+              <div className="text-sm text-gray-700 leading-relaxed">
+                {researchResult?.rationale ? (
+                  <p className="whitespace-pre-wrap">{researchResult.rationale}</p>
+                ) : (
+                  <p className="text-gray-500 italic">No detailed analysis available.</p>
+                )}
+              </div>
+            </section>
+
+            {/* Sources */}
+            {researchResult?.sources && researchResult.sources.length > 0 && (
+              <section className="mb-6">
+                <h2 className="font-semibold text-lg mb-2">Sources & References</h2>
+                <ul className="list-disc pl-6 text-sm text-gray-700 space-y-1">
+                  {researchResult.sources.map((source, index) => (
+                    <li key={index}>{source}</li>
+                  ))}
+                </ul>
+              </section>
             )}
-          </div>
-        </section>
 
-        {/* Research Objective */}
-        <section className="mb-6">
-          <h2 className="font-semibold text-lg mb-2">Research Objective</h2>
-          <p className="text-sm font-semibold text-gray-700 mb-2">Original Query:</p>
-          <div className="bg-gray-50 p-3 rounded mb-3">
-            <p className="text-sm text-gray-700 italic">
-              "{researchContext?.query || 'No query available'}"
-            </p>
-          </div>
-          
-          {pinnedResults.length > 0 && (
-            <>
-              <p className="text-sm font-semibold text-gray-700 mb-2">Key Insights (from pinned results):</p>
-              <ul className="list-disc pl-6 text-sm text-gray-700">
-                {pinnedResults.map((item, index) => (
-                  <li key={index} className="mb-1">
-                    {item.replace(/^Q-\d+: /, '')}
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-        </section>
-
-        {/* Analysis & Findings */}
-        <section className="mb-6">
-          <h2 className="font-semibold text-lg mb-2">Detailed Analysis & Rationale</h2>
-          <div className="text-sm text-gray-700 leading-relaxed">
-            {researchResult?.rationale ? (
-              <p className="whitespace-pre-wrap">{researchResult.rationale}</p>
-            ) : (
-              <p className="text-gray-500 italic">No detailed analysis available.</p>
-            )}
-          </div>
-        </section>
-
-        {/* Sources */}
-        {researchResult?.sources && researchResult.sources.length > 0 && (
-          <section className="mb-6">
-            <h2 className="font-semibold text-lg mb-2">Sources & References</h2>
-            <ul className="list-disc pl-6 text-sm text-gray-700 space-y-1">
-              {researchResult.sources.map((source, index) => (
-                <li key={index}>{source}</li>
-              ))}
-            </ul>
-          </section>
+            {/* Conclusion */}
+            <section>
+              <h2 className="font-semibold text-lg mb-2">Conclusion & Recommendations</h2>
+              {pinnedResults.length > 0 ? (
+                <>
+                  <p className="text-sm font-semibold text-gray-700 mb-2">Based on the research findings and selected insights:</p>
+                  <ul className="list-disc pl-6 text-sm text-gray-700">
+                    {pinnedResults.map((item, index) => (
+                      <li key={index} className="mb-1">
+                        {item.replace(/^Q-\d+: /, '')}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : (
+                <p className="text-sm text-gray-500 italic">
+                  No pinned insights available. Return to the research tabs to pin important findings for your report.
+                </p>
+              )}
+            </section>
+          </>
         )}
-
-        {/* Conclusion */}
-        <section>
-          <h2 className="font-semibold text-lg mb-2">Conclusion & Recommendations</h2>
-          {pinnedResults.length > 0 ? (
-            <>
-              <p className="text-sm font-semibold text-gray-700 mb-2">Based on the research findings and selected insights:</p>
-              <ul className="list-disc pl-6 text-sm text-gray-700">
-                {pinnedResults.map((item, index) => (
-                  <li key={index} className="mb-1">
-                    {item.replace(/^Q-\d+: /, '')}
-                  </li>
-                ))}
-              </ul>
-            </>
-          ) : (
-            <p className="text-sm text-gray-500 italic">
-              No pinned insights available. Return to the research tabs to pin important findings for your report.
-            </p>
-          )}
-        </section>
       </div>
     </div>
   );

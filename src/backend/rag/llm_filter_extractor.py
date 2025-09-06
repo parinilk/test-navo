@@ -1,8 +1,4 @@
-"""
-LLM-based Filter Extraction
-Implementation of "Use LLM to extract filters (preprocessing step) before vector search"
-as specified in RAG Filters.md
-"""
+
 import json
 import logging
 import asyncio
@@ -13,12 +9,7 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 class LLMFilterExtractor:
-    """
-    Uses LLM to extract structured filters from user queries as preprocessing step
-    Example from RAG Filters.md:
-    Query: "What are the most affordable collagen powders for skin health?"
-    LLM Output: {"format": "Powder", "primary_benefit": "Skin Health", "price_range": "Under $20"}
-    """
+    
     
     def __init__(self, llm_service=None):
         self.llm_service = llm_service

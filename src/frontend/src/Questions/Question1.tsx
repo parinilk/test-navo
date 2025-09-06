@@ -2,6 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import config from "../config/config";
+import { sessionDataManager } from "../utils/sessionDataManager";
+import { conversationStateManager } from "../utils/conversationStateManager";
+import FormattedLLMText from "../components/FormattedLLMText";
 
 interface Message {
   sender: "User" | "LLM";
@@ -25,28 +28,20 @@ interface ResearchResult {
   timestamp: string;
   retrieved_products?: any[];
   web_search_results?: WebSearchResult[];  // Added: web search results
-  confidence_score?: number;               // Added: confidence score
-  data_gaps?: string[];                   // Added: data gaps
   analysis_complexity?: string;            // Added: analysis complexity
   regulatory_analysis?: any;               // Added: regulatory analysis
 }
 
 const Question1 = ({ onPin, researchResult }: { onPin: (text: string) => void; researchResult: ResearchResult | null }) => {
-  // Initialize messages based on research result or use defaults
-  const getInitialMessages = (): Message[] => {
+  // Initialize conversation state for Question 1
+  const [messages, setMessages] = useState<Message[]>(() => {
+    // Initialize with research result if available, otherwise get from conversation state
     if (researchResult) {
-      return [
-        { sender: "User", text: researchResult.query },
-        { sender: "LLM", text: researchResult.answer }  // Changed: use answer instead of rationale
-      ];
+      conversationStateManager.initializeQuestion(1, researchResult);
+      return conversationStateManager.getMessages(1);
     }
-    return [
-      { sender: "User", text: "What is the rationale behind this?" },
-      { sender: "LLM", text: "Here's the detailed reasoning..." }
-    ];
-  };
-  
-  const [messages, setMessages] = useState<Message[]>(getInitialMessages());
+    return conversationStateManager.getMessages(1);
+  });
   const [selectedText, setSelectedText] = useState("");
   const [showPin, setShowPin] = useState(false);
   const [pinPosition, setPinPosition] = useState({ x: 0, y: 0 });
@@ -55,20 +50,26 @@ const Question1 = ({ onPin, researchResult }: { onPin: (text: string) => void; r
   const [editText, setEditText] = useState("");
   const [showConfirm, setShowConfirm] = useState(false);
   const [showDetails, setShowDetails] = useState(false);  // Added: toggle for detailed view
+  const [currentResearchResult, setCurrentResearchResult] = useState<ResearchResult | null>(researchResult);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   // Update messages when researchResult changes
   useEffect(() => {
-    const initialMessages: Message[] = researchResult ? [
-      { sender: "User", text: researchResult.query },
-      { sender: "LLM", text: researchResult.answer }  // Changed: use answer
-    ] : [
-      { sender: "User", text: "What is the rationale behind this?" },
-      { sender: "LLM", text: "Here's the detailed reasoning..." }
-    ];
-    setMessages(initialMessages);
+    if (researchResult) {
+      conversationStateManager.initializeQuestion(1, researchResult);
+      setMessages(conversationStateManager.getMessages(1));
+      setCurrentResearchResult(researchResult);
+    }
   }, [researchResult]);
+
+  // Get the latest research result from session data
+  useEffect(() => {
+    const latestResult = sessionDataManager.getQuestionResult(1);
+    if (latestResult) {
+      setCurrentResearchResult(latestResult);
+    }
+  }, [messages]); // Update when messages change (new queries)
 
   // --- scroll to bottom whenever messages change ---
   useEffect(() => {
@@ -103,14 +104,14 @@ const Question1 = ({ onPin, researchResult }: { onPin: (text: string) => void; r
 
   // Enhanced message rendering with detailed view
   const renderLLMMessage = (message: Message) => {
-    if (message.sender === "LLM" && researchResult) {
+    if (message.sender === "LLM" && currentResearchResult) {
       return (
         <div className="bg-gray-100 p-4 rounded-lg mb-4 max-w-[80%]">
           <div className="font-semibold text-gray-700 mb-2">LLM:</div>
           
           {/* Main Answer */}
-          <div className="text-gray-800 mb-4">
-            {message.text}
+          <div className="mb-4">
+            <FormattedLLMText text={message.text} />
           </div>
           
           {/* Toggle Details Button */}
@@ -126,19 +127,19 @@ const Question1 = ({ onPin, researchResult }: { onPin: (text: string) => void; r
             <div className="border-t pt-4 space-y-4">
               
               {/* Rationale */}
-              {researchResult.rationale && (
+              {currentResearchResult.rationale && (
                 <div>
                   <h4 className="font-semibold text-gray-700 mb-2">Rationale:</h4>
-                  <p className="text-gray-600 text-sm">{researchResult.rationale}</p>
+                  <p className="text-gray-600 text-sm">{currentResearchResult.rationale}</p>
                 </div>
               )}
               
               {/* Sources Used */}
-              {researchResult.sources_used && researchResult.sources_used.length > 0 && (
+              {currentResearchResult.sources_used && currentResearchResult.sources_used.length > 0 && (
                 <div>
                   <h4 className="font-semibold text-gray-700 mb-2">Sources Used:</h4>
                   <ul className="text-gray-600 text-sm space-y-1">
-                    {researchResult.sources_used.map((source, idx) => (
+                    {currentResearchResult.sources_used.map((source, idx) => (
                       <li key={idx} className="flex items-center">
                         <span className="text-green-500 mr-2">✅</span>
                         {source}
@@ -149,11 +150,11 @@ const Question1 = ({ onPin, researchResult }: { onPin: (text: string) => void; r
               )}
               
               {/* Web Search Results */}
-              {researchResult.web_search_results && researchResult.web_search_results.length > 0 && (
+              {currentResearchResult.web_search_results && currentResearchResult.web_search_results.length > 0 && (
                 <div>
                   <h4 className="font-semibold text-gray-700 mb-2">Web Search Results:</h4>
                   <div className="space-y-3">
-                    {researchResult.web_search_results.map((result, idx) => (
+                    {currentResearchResult.web_search_results.map((result, idx) => (
                       <div key={idx} className="bg-white p-3 rounded border">
                         <h5 className="font-medium text-gray-800 mb-1">{result.title}</h5>
                         <p className="text-gray-600 text-sm mb-1">Source: {result.source}</p>
@@ -176,45 +177,57 @@ const Question1 = ({ onPin, researchResult }: { onPin: (text: string) => void; r
                 </div>
               )}
               
+              {/* Retrieved Products */}
+              {currentResearchResult.retrieved_products && currentResearchResult.retrieved_products.length > 0 && (
+                <div>
+                  <h4 className="font-semibold text-gray-700 mb-2">
+                    Retrieved Products ({currentResearchResult.retrieved_products.length}):
+                  </h4>
+                  <div className="space-y-3">
+                    {currentResearchResult.retrieved_products.slice(0, 5).map((product, idx) => (
+                      <div key={idx} className="bg-white p-3 rounded border">
+                        <h5 className="font-medium text-gray-800 mb-1">
+                          {product.product_name || 'Unknown Product'}
+                        </h5>
+                        <div className="grid grid-cols-2 gap-2 text-sm text-gray-600">
+                          {product.brand && (
+                            <div><strong>Brand:</strong> {product.brand}</div>
+                          )}
+                          {product.category && (
+                            <div><strong>Category:</strong> {product.category}</div>
+                          )}
+                          {product.price && (
+                            <div><strong>Price:</strong> ${product.price}</div>
+                          )}
+                          {product.availability && (
+                            <div><strong>Availability:</strong> {product.availability}</div>
+                          )}
+                        </div>
+                        {product.similarity_score && (
+                          <div className="mt-2 text-xs text-gray-500">
+                            Similarity Score: {(product.similarity_score * 100).toFixed(1)}%
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                    {currentResearchResult.retrieved_products.length > 5 && (
+                      <p className="text-sm text-gray-500 italic">
+                        ... and {currentResearchResult.retrieved_products.length - 5} more products
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+              
               {/* Confidence Score & Data Gaps */}
               <div className="flex gap-4">
-                {researchResult.confidence_score !== undefined && (
-                  <div>
-                    <h4 className="font-semibold text-gray-700 mb-2">Confidence Score:</h4>
-                    <div className="flex items-center">
-                      <div className="w-20 bg-gray-200 rounded-full h-2 mr-2">
-                        <div 
-                          className="bg-blue-600 h-2 rounded-full" 
-                          style={{ width: `${researchResult.confidence_score * 100}%` }}
-                        ></div>
-                      </div>
-                      <span className="text-sm text-gray-600">
-                        {Math.round(researchResult.confidence_score * 100)}%
-                      </span>
-                    </div>
-                  </div>
-                )}
-                
-                {researchResult.data_gaps && researchResult.data_gaps.length > 0 && (
-                  <div>
-                    <h4 className="font-semibold text-gray-700 mb-2">Data Gaps:</h4>
-                    <ul className="text-gray-600 text-sm space-y-1">
-                      {researchResult.data_gaps.map((gap, idx) => (
-                        <li key={idx} className="flex items-center">
-                          <span className="text-yellow-500 mr-2">⚠️</span>
-                          {gap}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
               </div>
               
               {/* Disclaimer */}
-              {researchResult.disclaimer && (
+              {currentResearchResult.disclaimer && (
                 <div className="bg-yellow-50 border border-yellow-200 rounded p-3">
                   <h4 className="font-semibold text-yellow-800 mb-2">⚠️ Disclaimer:</h4>
-                  <p className="text-yellow-700 text-sm">{researchResult.disclaimer}</p>
+                  <p className="text-yellow-700 text-sm">{currentResearchResult.disclaimer}</p>
                 </div>
               )}
             </div>
@@ -235,7 +248,13 @@ const Question1 = ({ onPin, researchResult }: { onPin: (text: string) => void; r
         }`}>
           {message.sender}:
         </div>
-        <div className="text-gray-800">{message.text}</div>
+        <div className="text-gray-800">
+          {message.sender === "LLM" ? (
+            <FormattedLLMText text={message.text} />
+          ) : (
+            message.text
+          )}
+        </div>
       </div>
     );
   };
@@ -252,6 +271,11 @@ const Question1 = ({ onPin, researchResult }: { onPin: (text: string) => void; r
     setMessages((prev) => [...prev, loadingMessage]);
     
     try {
+      // Get session ID from session data manager
+      const sessionId = sessionDataManager.getCurrentSessionId();
+      
+      console.log('🔍 Sending query with session ID:', sessionId);
+      
       // Use the research API to get a real response
       const API_BASE_URL = config.apiUrl.replace('/api/v1', '');
       const response = await fetch(`${API_BASE_URL}/api/v1/research/query`, {
@@ -265,7 +289,7 @@ const Question1 = ({ onPin, researchResult }: { onPin: (text: string) => void; r
             previous_query: researchResult.query,
             session_id: researchResult.session_id
           } : undefined,
-          session_id: researchResult?.session_id || undefined,
+          session_id: sessionId,
         }),
       });
 
@@ -275,20 +299,26 @@ const Question1 = ({ onPin, researchResult }: { onPin: (text: string) => void; r
 
       const result = await response.json();
       
+      // Store research result in session data for comprehensive report generation
+      if (result.response_type === 'research') {
+        sessionDataManager.addQuestionResult(1, result);
+        console.log('✅ Stored Question 1 result in session data');
+      }
+      
       // Replace loading message with actual response
-      setMessages((prev) => 
-        prev.slice(0, -1).concat([{ sender: "LLM", text: result.answer }])
-      );
+      const newMessages = messages.slice(0, -1).concat([{ sender: "LLM", text: result.answer }]);
+      setMessages(newMessages);
+      conversationStateManager.updateMessages(1, newMessages);
       
     } catch (error) {
       console.error('Error getting LLM response:', error);
       // Replace loading message with error message
-      setMessages((prev) => 
-        prev.slice(0, -1).concat([{ 
-          sender: "LLM", 
-          text: "Sorry, I couldn't process your question right now. Please try again." 
-        }])
-      );
+      const errorMessages = messages.slice(0, -1).concat([{ 
+        sender: "LLM", 
+        text: "Sorry, I couldn't process your question right now. Please try again." 
+      }]);
+      setMessages(errorMessages);
+      conversationStateManager.updateMessages(1, errorMessages);
     }
   };
 
@@ -301,11 +331,76 @@ const Question1 = ({ onPin, researchResult }: { onPin: (text: string) => void; r
     setShowConfirm(true);
   };
 
-  const confirmSave = () => {
+  const confirmSave = async () => {
     if (editIndex === null) return;
+    
     const updated = [...messages];
     updated[editIndex].text = editText;
-    setMessages(updated);
+    
+    // If we're editing a user message, we need to regenerate subsequent responses
+    if (messages[editIndex].sender === "User") {
+      // Remove all messages after the edited one
+      const messagesUpToEdit = updated.slice(0, editIndex + 1);
+      setMessages(messagesUpToEdit);
+      conversationStateManager.updateMessages(1, messagesUpToEdit);
+      
+      // Add loading message
+      const loadingMessage: Message = { sender: "LLM", text: "Regenerating response..." };
+      const messagesWithLoading = [...messagesUpToEdit, loadingMessage];
+      setMessages(messagesWithLoading);
+      conversationStateManager.updateMessages(1, messagesWithLoading);
+      
+      try {
+        // Use the research API to get a new response based on the edited message
+        const API_BASE_URL = config.apiUrl.replace('/api/v1', '');
+        const response = await fetch(`${API_BASE_URL}/api/v1/research/query`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            query: editText.trim(),
+            context: researchResult ? {
+              previous_query: researchResult.query,
+              session_id: researchResult.session_id
+            } : undefined,
+            session_id: researchResult?.session_id || undefined,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to get response');
+        }
+
+        const result = await response.json();
+        
+        // Store updated research result in session data
+        if (result.response_type === 'research') {
+          sessionDataManager.addQuestionResult(1, result);
+          console.log('✅ Updated Question 1 result in session data');
+        }
+        
+        // Replace loading message with actual response
+        const regeneratedMessages = messages.slice(0, -1).concat([{ sender: "LLM", text: result.answer }]);
+        setMessages(regeneratedMessages);
+        conversationStateManager.updateMessages(1, regeneratedMessages);
+        
+      } catch (error) {
+        console.error('Error regenerating LLM response:', error);
+        // Replace loading message with error message
+        const errorMessages = messages.slice(0, -1).concat([{ 
+          sender: "LLM", 
+          text: "Sorry, I couldn't regenerate the response right now. Please try again." 
+        }]);
+        setMessages(errorMessages);
+        conversationStateManager.updateMessages(1, errorMessages);
+      }
+    } else {
+      // If editing an LLM message, just update the text
+      setMessages(updated);
+      conversationStateManager.updateMessages(1, updated);
+    }
+    
     setEditIndex(null);
     setEditText("");
     setShowConfirm(false);
@@ -313,12 +408,12 @@ const Question1 = ({ onPin, researchResult }: { onPin: (text: string) => void; r
   };
 
   return (
-    <div className="relative bg-white p-4 rounded shadow w-[580px] h-[470px] flex flex-col overflow-hidden">
+    <div className="relative bg-white p-4 rounded shadow w-full h-full flex flex-col overflow-hidden">
       {/* Header */}
       <h2 className="text-lg font-semibold mb-2">Conversation for Question 1</h2>
 
       {/* Messages */}
-      <div className="space-y-4 flex-1 overflow-y-auto scrollbar-hide pr-2">
+      <div className="space-y-4 flex-1 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100 hover:scrollbar-thumb-gray-400">
         {messages.map((msg, idx) => (
           <div
             key={idx}
@@ -443,9 +538,12 @@ const Question1 = ({ onPin, researchResult }: { onPin: (text: string) => void; r
       {showConfirm && (
         <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
           <div className="bg-white p-6 rounded-xl shadow-lg w-80 text-center">
-            <h2 className="text-lg font-semibold mb-4">Confirm Save</h2>
+            <h2 className="text-lg font-semibold mb-4">Confirm Edit</h2>
             <p className="text-gray-600 mb-6">
-              To make these changes, you will lose{" "}
+              {messages[editIndex!]?.sender === "User" 
+                ? "Editing this message will regenerate the AI response. This will cost "
+                : "To make these changes, you will lose "
+              }
               <span className="font-bold text-red-500">10 credits</span>.
             </p>
             <div className="flex justify-around">

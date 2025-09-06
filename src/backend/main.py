@@ -24,6 +24,8 @@ logging.basicConfig(
 from api.research import router as research_router
 from api.products import router as products_router
 from api.analytics import router as analytics_router
+from api.auth import router as auth_router
+from api.dashboard import router as dashboard_router
 from models.database import connect_to_mongo, close_mongo_connection
 from models.pinecone_vector_store import pinecone_vector_store
 from models.dataset_manager import dataset_manager
@@ -49,7 +51,7 @@ app = FastAPI(
 
 # CORS middleware for frontend integration
 # Get allowed origins from environment variable, fallback to common development URLs
-allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3001,http://localhost:5173").split(",")
 
 app.add_middleware(
     CORSMiddleware,
@@ -238,9 +240,11 @@ async def simple_research_query(data: dict):
     }
 
 # Include API routers
+app.include_router(auth_router, prefix="/api/v1/auth", tags=["authentication"])
 app.include_router(research_router, prefix="/api/v1/research", tags=["research"])
 app.include_router(products_router, prefix="/api/v1/products", tags=["products"])
 app.include_router(analytics_router, prefix="/api/v1/analytics", tags=["analytics"])
+app.include_router(dashboard_router, prefix="/api/v1", tags=["dashboard"])
 
 # Dependency to get vector store (works with both Pinecone and local)
 def get_vector_store():

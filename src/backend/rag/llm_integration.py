@@ -9,6 +9,14 @@ import re
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 
+# Load environment variables from .env file if it exists
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # dotenv not installed, continue without it
+    pass
+
 # Use direct OpenAI integration for now (LangChain has complex dependencies)
 logging.info("Using direct OpenAI integration")
 
@@ -139,6 +147,24 @@ class LLMService:
         if not response:
             return response
         
+        # First, handle cases where headers are concatenated without line breaks
+        # Add line breaks before main headers
+        response = re.sub(r'(### \*\*[^*]+\*\*)', r'\n\n\1\n', response)
+        response = re.sub(r'(\*\*[^*]+:\*\*)', r'\n\n\1', response)
+        
+        # Add line breaks before numbered lists
+        response = re.sub(r'(\d+\. \*\*[^*]+\*\*)', r'\n\n\1', response)
+        
+        # Add line breaks before bullet points that follow text
+        response = re.sub(r'([a-zA-Z.]) (• [^•]+)', r'\1\n\2', response)
+        
+        # Add line breaks before product listings
+        response = re.sub(r'(\*\*Sample Products:\*\*)', r'\n\n\1\n', response)
+        
+        # Add line breaks after colons in headers
+        response = re.sub(r'(\*\*[^*]+:\*\*) ([^*\n])', r'\1\n\2', response)
+        
+        # Split into lines for further processing
         lines = response.split('\n')
         formatted_lines = []
         
@@ -148,38 +174,54 @@ class LLMService:
                 formatted_lines.append('')
                 continue
             
-            if line.startswith('###') and '**' in line:
+            # Handle main headers (###)
+            if line.startswith('###'):
+                # Add spacing before header (except first)
                 if i > 0 and formatted_lines and formatted_lines[-1] != '':
                     formatted_lines.append('')
                 formatted_lines.append(line)
                 formatted_lines.append('')
                 continue
             
-            if line.startswith('####') and '**' in line:
+            # Handle sub-headers (#### or **Header:**)
+            if line.startswith('####') or (line.startswith('**') and line.endswith('**') and ':' in line):
+                formatted_lines.append('')
                 formatted_lines.append(line)
                 formatted_lines.append('')
                 continue
             
+            # Handle bullet points
             if line.startswith('•') or line.startswith('-'):
                 if not line.startswith('•'):
                     line = line.replace('-', '•', 1)
                 formatted_lines.append(f"  {line}")
                 continue
             
+            # Handle numbered lists
             if re.match(r'^\d+\.', line):
+                formatted_lines.append(f"\n{line}")
+                continue
+            
+            # Handle bold text that starts a line (likely a product name or key point)
+            if line.startswith('**') and '**' in line[2:]:
+                formatted_lines.append(f"\n{line}")
+                continue
+            
+            # Handle lines that start with a dash (product details)
+            if line.startswith('- '):
                 formatted_lines.append(f"  {line}")
                 continue
             
-            if '**' in line:
-                if line.startswith('**'):
-                    line = f" {line}"
-                formatted_lines.append(line)
-                continue
-            
+            # Regular text
             formatted_lines.append(line)
         
+        # Join and clean up excessive whitespace
         formatted_response = '\n'.join(formatted_lines)
-        formatted_response = re.sub(r'\n{3,}', '\n\n', formatted_response)
+        
+        # Remove excessive line breaks but preserve intentional spacing
+        formatted_response = re.sub(r'\n{4,}', '\n\n\n', formatted_response)
+        formatted_response = re.sub(r'^\n+', '', formatted_response)  # Remove leading newlines
+        formatted_response = re.sub(r'\n+$', '', formatted_response)  # Remove trailing newlines
         
         return formatted_response
     
@@ -190,8 +232,9 @@ class LLMService:
 ### **🎯 CRITICAL INSTRUCTION - MANDATORY COMPLIANCE**
 - **ALWAYS answer the user's specific question first and foremost**
 - **NEVER answer a different question than what the user asked**
-- **Each query is a NEW SESSION - ignore any previous conversations**
-- **Stay focused on the current question only**
+- **Use previous conversation context when provided to maintain continuity**
+- **Reference previous queries and responses when relevant to the current question**
+- **Stay focused on the current question while leveraging context for better understanding**
 - **If retrieved data doesn't address the question, say so clearly**
 
 ### **📦 MANDATORY PRODUCT DISPLAY REQUIREMENT**
@@ -262,7 +305,8 @@ Before responding, verify you have:
         vector_results: List[Dict[str, Any]] = None,
         processed_query: Dict[str, Any] = None,
         web_search_results: List[Dict[str, Any]] = None,
-        conversation_history: Optional[List[Dict[str, Any]]] = None
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
+        custom_prompt: Optional[str] = None
     ) -> Dict[str, Any]:
         """Generate a research response using LLM"""
         
@@ -284,10 +328,6 @@ Before responding, verify you have:
                 # Check rate limiting
                 self._check_rate_limit()
                 
-                # Enhanced analysis for System Prompt compliance
-                data_gaps = self._identify_data_gaps(product_data or [], processed_query or {})
-                confidence_score = self._calculate_confidence_score(product_data or [], web_search_results or [], data_gaps)
-                
                 # Prepare context for the LLM
                 llm_context = self._prepare_context(
                     query=query,
@@ -296,9 +336,8 @@ Before responding, verify you have:
                     vector_results=vector_results or [],
                     processed_query=processed_query or {},
                     web_search_results=web_search_results or [],
-                    data_gaps=data_gaps,
-                    confidence_score=confidence_score,
-                    conversation_history=conversation_history
+                    conversation_history=conversation_history,
+                    custom_prompt=custom_prompt
                 )
                 
                 # Create the prompt
@@ -325,8 +364,6 @@ Before responding, verify you have:
                         "rationale": parsed_response.get("rationale", "Generated using available data and domain knowledge"),
                         "sources_used": parsed_response.get("sources_used", ["Retrieved Product Data", "Pretrained Knowledge"]),
                         "disclaimer": self._get_regulatory_disclaimer() if self._needs_regulatory_disclaimer(query, processed_query or {}) else None,
-                        "confidence_score": confidence_score,
-                        "data_gaps": data_gaps,
                         "attempts": attempt + 1,
                         "timestamp": datetime.utcnow().isoformat()
                     }
@@ -378,7 +415,8 @@ Before responding, verify you have:
                 
             else:
                 # Regular OpenAI
-                response = openai.ChatCompletion.create(
+                client = openai.OpenAI(api_key=self.openai_api_key)
+                response = client.chat.completions.create(
                     model="gpt-3.5-turbo",
                     messages=[
                         {"role": "system", "content": self.system_prompt},
@@ -446,7 +484,8 @@ Before responding, verify you have:
                     
                 else:
                     # Regular OpenAI
-                    response = openai.ChatCompletion.create(
+                    client = openai.OpenAI(api_key=self.openai_api_key)
+                    response = client.chat.completions.create(
                         model="gpt-3.5-turbo",
                         messages=[
                             {"role": "system", "content": "You are a helpful assistant that provides structured responses."},
@@ -485,38 +524,47 @@ Before responding, verify you have:
         vector_results: List[Dict],
         processed_query: Dict,
         web_search_results: List[Dict] = None,
-        data_gaps: List[str] = None,
-        confidence_score: float = 0.0,
-        conversation_history: Optional[List[Dict]] = None
+        conversation_history: Optional[List[Dict]] = None,
+        custom_prompt: Optional[str] = None
     ) -> str:
         """Prepare context string for LLM with smart context retention"""
         
         context_parts = []
         
-        # SMART CONTEXT RETENTION: Only clear irrelevant context
-        if conversation_history:
-            # Check if this is a follow-up to the same topic
-            is_follow_up = self._is_follow_up_question(query, conversation_history)
-            if is_follow_up:
-                context_parts.append("**🔄 FOLLOW-UP QUESTION - Maintaining relevant context**")
-            else:
-                context_parts.append("**🔄 NEW TOPIC - Previous context cleared**")
+        # If custom prompt is provided, use it as the primary instruction
+        if custom_prompt:
+            context_parts.append("**🎯 CUSTOM TASK INSTRUCTIONS:**")
+            context_parts.append(custom_prompt)
+            context_parts.append("")
+            context_parts.append("**📋 ADDITIONAL CONTEXT AND DATA:**")
+            context_parts.append("")
         else:
-            context_parts.append("**🔄 NEW SESSION - No previous context**")
-        context_parts.append("")
+            # INTELLIGENT CONTEXT RETENTION: Always provide conversation history to LLM
+            if conversation_history:
+                context_parts.append("**🔄 CONVERSATION HISTORY AVAILABLE**")
+                context_parts.append("You have access to previous conversation context. Use it intelligently to:")
+                context_parts.append("- Reference previous topics when relevant")
+                context_parts.append("- Build upon previous answers when appropriate") 
+                context_parts.append("- Ignore irrelevant previous context for new topics")
+                context_parts.append("")
+            else:
+                context_parts.append("**🔄 NEW SESSION - No previous context**")
+            context_parts.append("")
         
         # ALWAYS start with the user's query - this is the most important thing
         context_parts.append("**🎯 USER'S QUESTION:**")
         context_parts.append(f"'{query}'")
         context_parts.append("")
         
-        # Smart context retention based on conversation flow
-        if conversation_history and self._is_follow_up_question(query, conversation_history):
-            # Keep relevant context from previous questions in the same conversation
-            relevant_context = self._extract_relevant_context(query, conversation_history)
-            if relevant_context:
-                context_parts.append("**📚 Relevant Context from Previous Questions:**")
-                context_parts.append(relevant_context)
+        # Always provide conversation history when available
+        if conversation_history:
+            context_parts.append("**📚 Previous Conversation Context:**")
+            for i, entry in enumerate(conversation_history[-3:], 1):  # Show last 3 conversations
+                context_parts.append(f"**Previous Question {i}:** {entry.get('query', '')}")
+                if entry.get('response'):
+                    # Truncate long responses to keep context manageable
+                    response_preview = entry['response'][:200] + "..." if len(entry['response']) > 200 else entry['response']
+                    context_parts.append(f"**Previous Answer {i}:** {response_preview}")
                 context_parts.append("")
         
         context_parts.append("**⚠️ REMEMBER: Answer this specific question above. Do not get distracted by irrelevant data.**")
@@ -629,21 +677,6 @@ Before responding, verify you have:
                     context_parts.append(f"   URL: {result['url']}")
                 context_parts.append("")
         
-        # Add data quality assessment (System Prompt compliance)
-        if data_gaps or confidence_score:
-            context_parts.append("**Data Quality Assessment:**")
-            context_parts.append(f"- Analysis Confidence: {confidence_score:.2f} ({self._get_confidence_label(confidence_score)})")
-            
-            if data_gaps:
-                context_parts.append("- Identified Data Gaps:")
-                for gap in data_gaps:
-                    context_parts.append(f"  • {gap}")
-                context_parts.append("- Note: Analysis confidence reduced due to missing data")
-            else:
-                context_parts.append("- No critical data gaps identified")
-            
-            context_parts.append("")
-        
         # Final reminder - DYNAMIC based on user's actual question
         context_parts.append(f"**🎯 FINAL REMINDER: Answer the user's question: '{query}'**")
         context_parts.append("**Do NOT answer a different question. Stay focused on what the user actually asked.**")
@@ -726,90 +759,12 @@ Note: This is a demo response generated without OpenAI API. For full functionali
             "answer": f"I apologize, but I encountered an issue processing your query: '{query}'. Please try rephrasing your question or contact support if the issue persists.",
             "rationale": f"Technical error occurred during response generation: {error}",
             "sources_used": ["Error Response"],
-            "disclaimer": "This is an error response. Please try again or contact support.",
-            "confidence_score": 0.0,
-            "data_gaps": ["System error occurred"]
+            "disclaimer": "This is an error response. Please try again or contact support."
         }
     
-    def _identify_data_gaps(self, product_data: List[Dict], processed_query: Dict) -> List[str]:
-        """Identify missing data that affects analysis quality (System Prompt compliance)"""
-        gaps = []
-        
-        # Check product data completeness
-        if not product_data:
-            gaps.append("No product data available for analysis")
-            return gaps
-        
-        # Check for missing ingredient information
-        products_without_ingredients = [p for p in product_data if not p.get('ingredients') and not p.get('description')]
-        if products_without_ingredients:
-            gaps.append(f"Ingredient information missing for {len(products_without_ingredients)} products")
-        
-        # Check for missing pricing data
-        products_without_pricing = [p for p in product_data if not p.get('price')]
-        if products_without_pricing:
-            gaps.append(f"Pricing information missing for {len(products_without_pricing)} products")
-        
-        # Check for missing concentration data (regulatory sensitive)
-        if processed_query.get('regulatory_sensitive'):
-            gaps.append("Ingredient concentrations needed for regulatory analysis")
-        
-        # Check for specific data requirements
-        data_requirements = processed_query.get('data_requirements', [])
-        if 'ingredient_concentrations' in data_requirements:
-            gaps.append("Detailed ingredient concentrations required")
-        if 'pricing_per_serving' in data_requirements:
-            gaps.append("Per-serving pricing calculations needed")
-        if 'regulatory_compliance' in data_requirements:
-            gaps.append("Regulatory compliance data required")
-        
-        return gaps
-    
-    def _calculate_confidence_score(self, product_data: List[Dict], web_search_results: List[Dict], data_gaps: List[str]) -> float:
-        """Calculate confidence score for analysis (System Prompt compliance)"""
-        base_confidence = 1.0
-        
-        # Deduct for missing product data
-        if not product_data:
-            return 0.1
-        
-        # Deduct for each data gap
-        gap_penalty = len(data_gaps) * 0.15
-        confidence = base_confidence - gap_penalty
-        
-        # Adjust for data completeness
-        if product_data:
-            # Check completeness of product data
-            complete_products = 0
-            for product in product_data:
-                completeness = 0
-                if product.get('product_name'): completeness += 1
-                if product.get('brand'): completeness += 1
-                if product.get('price'): completeness += 1
-                if product.get('description'): completeness += 1
-                if completeness >= 3: complete_products += 1
-            
-            completeness_ratio = complete_products / len(product_data)
-            confidence *= completeness_ratio
-        
-        # Bonus for web search results
-        if web_search_results:
-            confidence += 0.1
-        
-        return max(0.0, min(1.0, confidence))
-    
-    def _get_confidence_label(self, confidence_score: float) -> str:
-        """Get confidence label for score"""
-        if confidence_score >= 0.8:
-            return "High"
-        elif confidence_score >= 0.6:
-            return "Medium"
-        elif confidence_score >= 0.4:
-            return "Low"
-        else:
-            return "Very Low"
 
-    def _is_follow_up_question(self, current_query: str, conversation_history: List[Dict]) -> bool:
+    # DEPRECATED: No longer using keyword-based follow-up detection
+    def _is_follow_up_question_deprecated(self, current_query: str, conversation_history: List[Dict]) -> bool:
         """Determine if current query is a follow-up to the same conversation topic"""
         if not conversation_history:
             return False
