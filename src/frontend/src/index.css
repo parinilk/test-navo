@@ -97,4 +97,20 @@
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.5);
 }
+
+/* Google Sign-In Button Styling */
+.gsi-button {
+  margin: 0 auto !important;
+  display: flex !important;
+  justify-content: center !important;
+  align-items: center !important;
+  width: 100% !important;
+}
+
+/* Ensure Google button container is centered */
+[data-google-button] {
+  display: flex !important;
+  justify-content: center !important;
+  width: 100% !important;
+}
  

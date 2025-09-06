@@ -55,6 +55,17 @@ const Signup: React.FC = () => {
             shape: 'rectangular',
             logo_alignment: 'left',
           });
+          
+          // Add custom styling to center the Google button
+          if (googleButtonRef.current) {
+            const googleButton = googleButtonRef.current.querySelector('div[role="button"]') as HTMLElement;
+            if (googleButton) {
+              googleButton.style.margin = '0 auto';
+              googleButton.style.display = 'flex';
+              googleButton.style.justifyContent = 'center';
+              googleButton.style.alignItems = 'center';
+            }
+          }
         }
       } catch (error) {
         console.error('Google Auth initialization failed:', error);
@@ -405,7 +416,11 @@ const Signup: React.FC = () => {
               </div>
 
               {/* Google Signup Button */}
-              <div ref={googleButtonRef} className="w-full"></div>
+              <div ref={googleButtonRef} className="w-full flex justify-center" data-google-button>
+                <div className="w-full max-w-full">
+                  {/* Google button will be rendered here */}
+                </div>
+              </div>
 
               {/* Login Link */}
               <div className="mt-8 text-center">
